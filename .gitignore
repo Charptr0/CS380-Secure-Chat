@@ -1,2 +1,8 @@
 chat
 dh-example
+
+# vscode stuff
+.vscode
+
+# output stuff
+*.o
