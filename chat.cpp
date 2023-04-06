@@ -56,7 +56,7 @@ int listensock, sockfd;
  * Write a log message to a text file
  * @author Chenhao L.
 */
-int log(char* message, char* filename = "log.txt") {
+int log(const char* message, const char* filename = "log.txt") {
     
     // check to make sure file name exists
     FILE *logFile = fopen(filename, "r");
@@ -69,7 +69,7 @@ int log(char* message, char* filename = "log.txt") {
             return 1;
         }
 
-        fprintf(newLogFile, "Beginning of the log file\n");
+        fprintf(newLogFile, "--Beginning of the log file--\n");
 
         fclose(newLogFile);
     } else fclose(logFile);
@@ -99,8 +99,6 @@ int log(char* message, char* filename = "log.txt") {
 // required handshake with the client
 int initServerNet(int port)
 {
-
-	
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
 	listensock = socket(AF_INET, SOCK_STREAM, 0);
@@ -124,7 +122,8 @@ int initServerNet(int port)
 	close(listensock);
 	fprintf(stderr, "connection made, starting session...\n");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init server success");
+	log("initServerNet Line 127: Successfully connected to server");
+	
 	return 0;
 }
 
@@ -148,7 +147,27 @@ static int initClientNet(char* hostname, int port)
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
 		error("ERROR connecting");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init client success");
+
+	// connection successful with the client and server
+	// since client goes first, call the init func
+	log("initClientNet Line 154: Successfully connected to client");
+
+	if (init("params") != 0) {
+		log("initClientNet Line 156: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+	}
+
+	// generate user 1 key
+	NEWZ(user1_sk);
+	NEWZ(user1_pk);
+	dhGen(user1_sk, user1_pk);
+
+	// generate user 2 key
+	NEWZ(user2_sk);
+	NEWZ(user2_pk);
+	dhGen(user2_sk, user2_pk);
+
+	// they are equal :)
 
 	return 0;
 }
