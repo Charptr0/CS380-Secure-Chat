@@ -6,3 +6,6 @@ dh-example
 
 # output stuff
 *.o
+
+# logs
+log.txt

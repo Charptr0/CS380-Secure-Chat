@@ -52,6 +52,42 @@ static deque<string> transcript;
 
 int listensock, sockfd;
 
+/**
+ * Write a log message to a text file
+ * @author Chenhao L.
+*/
+int log(char* message, char* filename = "log.txt") {
+    
+    // check to make sure file name exists
+    FILE *logFile = fopen(filename, "r");
+    if(logFile == NULL) {
+        // create this file
+        FILE *newLogFile = fopen(filename, "w");
+        
+        if(newLogFile == NULL)  {
+            printf("Cannot create %s", filename); 
+            return 1;
+        }
+
+        fprintf(newLogFile, "Beginning of the log file\n");
+
+        fclose(newLogFile);
+    } else fclose(logFile);
+
+    // write to log file
+    FILE *fp;
+	fp = fopen(filename, "a");
+	if(fp == NULL) {
+        printf("Cannot open %s", filename);
+		return 1; 
+	}
+
+	fprintf(fp, "%s\n", message);
+	fclose(fp);
+
+    return 0;
+}
+
 [[noreturn]] static void fail_exit(const char *msg);
 
 [[noreturn]] static void error(const char *msg)
@@ -60,8 +96,11 @@ int listensock, sockfd;
 	fail_exit("");
 }
 
+// required handshake with the client
 int initServerNet(int port)
 {
+
+	
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
 	listensock = socket(AF_INET, SOCK_STREAM, 0);
@@ -85,10 +124,11 @@ int initServerNet(int port)
 	close(listensock);
 	fprintf(stderr, "connection made, starting session...\n");
 	/* at this point, should be able to send/recv on sockfd */
+	log("init server success");
 	return 0;
 }
 
-
+// required handshake with the sever
 static int initClientNet(char* hostname, int port)
 {
 	struct sockaddr_in serv_addr;
@@ -108,6 +148,8 @@ static int initClientNet(char* hostname, int port)
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
 		error("ERROR connecting");
 	/* at this point, should be able to send/recv on sockfd */
+	log("init client success");
+
 	return 0;
 }
 
