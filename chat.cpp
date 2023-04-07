@@ -52,6 +52,14 @@ static deque<string> transcript;
 
 int listensock, sockfd;
 
+static bool should_exit = false;
+
+// global variables for pks and sks
+mpz_t global_user1_pk;
+mpz_t global_user1_sk;
+mpz_t global_user2_pk;
+mpz_t global_user2_sk;
+
 /**
  * Write a log message to a text file
  * @author Chenhao L.
@@ -122,8 +130,29 @@ int initServerNet(int port)
 	close(listensock);
 	fprintf(stderr, "connection made, starting session...\n");
 	/* at this point, should be able to send/recv on sockfd */
-	log("initServerNet Line 127: Successfully connected to server");
+	log("initServerNet: Successfully connected to server");
 	
+	if (init("params") != 0) {
+		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+
+		should_exit = true;
+
+		// instead of shutting down the program when keys cannot be generated, in the future
+		// there should be a feature that informs both users that the chat is not encrypted and unsecured
+		// - Chenhao L.
+	}
+
+	// generate user 2 key
+	NEWZ(global_user2_sk);
+	NEWZ(global_user2_pk);
+	if(dhGen(global_user2_sk, global_user2_pk) != 0) {
+		log("Something went wrong in dhGen() on the server, did you run the init() function?");
+
+		// exit the program
+		should_exit = true;
+	}
+
 	return 0;
 }
 
@@ -153,21 +182,19 @@ static int initClientNet(char* hostname, int port)
 	log("initClientNet Line 154: Successfully connected to client");
 
 	if (init("params") != 0) {
-		log("initClientNet Line 156: Cannot init Diffie Hellman key exchange :(");
+		log("initClientNet: Cannot init Diffie Hellman key exchange :(");
 		printf("Cannot init Diffie Hellman key exchange :(");
+		should_exit = true;
 	}
 
 	// generate user 1 key
-	NEWZ(user1_sk);
-	NEWZ(user1_pk);
-	dhGen(user1_sk, user1_pk);
+	NEWZ(global_user1_pk);
+	NEWZ(global_user1_sk);
+	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
+		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
-	// generate user 2 key
-	NEWZ(user2_sk);
-	NEWZ(user2_pk);
-	dhGen(user2_sk, user2_pk);
-
-	// they are equal :)
+		should_exit = true;
+	}
 
 	return 0;
 }
@@ -205,7 +232,6 @@ static int shutdownNetwork()
 	fail_exit(#fn"("#__VA_ARGS__") failed"); \
 	while (false)
 
-static bool should_exit = false;
 
 // Message window
 static WINDOW *msg_win;
