@@ -61,8 +61,13 @@ mpz_t global_user2_pk;
 mpz_t global_user2_sk;
 
 const size_t klen = 128;
-unsigned char kA[klen];
-unsigned char kB[klen];
+int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
+bool isclient; //turned global for convienence
+bool gotPK = false;
+bool varification = false;
+unsigned char kA[klen]; //client dhfinal
+unsigned char kB[klen]; //server dhfinal
+
 /**
  * Write a log message to a text file
  * @author Chenhao L.
@@ -105,18 +110,6 @@ int log(const char* message, const char* filename = "log.txt") {
 {
 	perror(msg);
 	fail_exit("");
-}
-
-static int shutdownNetwork()
-{
-	shutdown(sockfd,2);
-	unsigned char dummy[64];
-	ssize_t r;
-	do {
-		r = recv(sockfd,dummy,64,0);
-	} while (r != 0 && r != -1);
-	close(sockfd);
-	return 0;
 }
 
 // required handshake with the client
@@ -168,24 +161,16 @@ int initServerNet(int port)
 		should_exit = true;
 	}
 
-	// dhGen(global_user2_sk, global_user2_pk);
+	//store public key 2 (g^a mod p) to file "PublicKey2". 
+	FILE *pk2 = fopen("PublicKey2", "w");
+	mpz_out_str(pk2, base, global_user2_pk);
+	fclose(pk2);
 
-	size_t mpf_out_str (FILE *stream, int base, size_t n_digits, const mpf_t global_user2_pk);
-
-	dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-
-	if (memcmp(kA,kB,klen) == 0) {
-		printf("Alice and Bob have the same key :D\n");
-	} else {
-		// printf("\n");
-		printf("Bob's key:\n");
-		for (size_t i = 0; i < klen; i++) {
-			printf("%02x ",kB[i]);
-		}
-		shutdownNetwork();
-		// deinit_ncurses();
-		// deinit_readline();	
-	}
+	// //read from file to get other persons public key 1.
+	// FILE *pk1 = fopen("PublicKey1", "r");
+	// mpz_inp_str(global_user1_pk, pk1, base);
+	// fclose(pk1);
+	// error: dhfinal output becomes all zeros
 
 	return 0;
 }
@@ -222,30 +207,37 @@ static int initClientNet(char* hostname, int port)
 	}
 
 	// generate user 1 key
-	NEWZ(global_user1_pk);
 	NEWZ(global_user1_sk);
+	NEWZ(global_user1_pk);
 	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
 		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
 		should_exit = true;
 	}
 
-	// dhGen(global_user1_sk, global_user1_pk);
-	dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+	//store public key 1 (g^b mod p) to file "PublicKey1". 
+	FILE *pk1 = fopen("PublicKey1", "w");
+	mpz_out_str(pk1, base, global_user1_pk);
+	fclose(pk1);
 
-	if (memcmp(kA,kB,klen) == 0) {
-		printf("Alice and Bob have the same key :D\n");
-	} else {
-		printf("Alice's key:\n");
-		for (size_t i = 0; i < klen; i++) {
-			printf("%02x ",kA[i]);
-		}
+	// //read from file to get other persons public key 2.
+	// FILE *pk2 = fopen("PublicKey2", "r");
+	// mpz_inp_str(global_user2_pk, pk2, base);
+	// fclose(pk2); 
+	// error: dhfinal output becomes all zeros
 
-		shutdownNetwork();
-		// deinit_ncurses();
-		// deinit_readline();	
-	}
-	//not the same key
+	return 0;
+}
+
+static int shutdownNetwork()
+{
+	shutdown(sockfd,2);
+	unsigned char dummy[64];
+	ssize_t r;
+	do {
+		r = recv(sockfd,dummy,64,0);
+	} while (r != 0 && r != -1);
+	close(sockfd);
 	return 0;
 }
 
@@ -303,6 +295,84 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 
 static void msg_typed(char *line)
 {
+	// /* Alice's key derivation: */
+	// unsigned char kA[klen];
+	// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+	// /* Bob's key derivation: */
+	// unsigned char kB[klen];
+	// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+	// printf("Alice's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		printf("%02x ",kA[i]);
+	// 	}
+	// printf("\n");
+	// printf("Bob's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		printf("%02x ",kB[i]);
+	// }
+	/*exact same code, every time. 
+	d0 6b 94 ca bb 8c b0 da 5c 08 c7 2f e2 5a a9 37 61 c6 70 ab 0b ce 75 4b 87 8c d9 89 4e 4f 65 fe e6 b1 c1 aa d5 82 e8 78 ae ed 5a ee ab 9b 60 bb 3b
+	 69 2c 64 99 93 a0 d3 3a 2a d7 2d e7 68 ac fa 33 8a ab 42 fa cf 83 36 8b bd 08 ad d5 29 03 27 18 42 b5 f2 73 0b d9 13 f6 03 14 6e 53 c1 ae 34 3a 
+	 a1 d9 a2 87 cf 2c b0 b4 2b f0 51 23 f1 1f 85 af 70 05 f0 d7 4a 46 d5 7d 45 95 eb a9 2a bc 9a
+	*/
+
+	if(isclient && !gotPK)
+	{
+		//read from file to get other persons public key 2.
+		FILE *pk2 = fopen("PublicKey2", "r");
+		mpz_inp_str(global_user2_pk, pk2, base);
+		fclose(pk2);
+		gotPK = true;
+		//Get DH
+		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH1 = fopen("DH1-PK2", "w");
+		mpz_out_str(DH1, base, global_user2_pk);
+		fclose(DH1);
+		// verified: received correct pk
+	}
+	else if (!isclient && !gotPK)
+	{
+		//read from file to get other persons public key 1.
+		FILE *pk1 = fopen("PublicKey1", "r");
+		mpz_inp_str(global_user1_pk, pk1, base);
+		fclose(pk1);
+		gotPK = true;
+		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kB[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH2 = fopen("DH2-PK1", "w");
+		mpz_out_str(DH2, base, global_user1_pk);
+		fclose(DH2); 
+		//verified: received correct pk
+	}
+
+	if(isclient)
+	{
+		printf("\nAlice's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			printf("%02x ",kA[i]);
+		}
+	}
+
+	else
+	{
+		printf("\nBob's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			printf("%02x ",kB[i]);
+		}
+		
+	}
+
+
 	string mymsg;
 	if (!line) {
 		// Ctrl-D pressed on empty line
@@ -314,6 +384,21 @@ static void msg_typed(char *line)
 			add_history(line);
 			mymsg = string(line);
 			transcript.push_back("me: " + mymsg);
+			// const size_t klen = 128;
+			/* Alice's key derivation: */
+			// unsigned char kA[klen];
+			// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+			/* Bob's key derivation: */
+			// unsigned char kB[klen];
+			// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+			/* make sure they are the same: */
+			// if (memcmp(kA,kB,klen) == 0) {
+			// 	log("Alice and Bob have the same key :D\n");
+			// } else {
+			// 	log("T.T\n");
+			// }
+
 			ssize_t nbytes;
 			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
 				error("send failed");
@@ -480,7 +565,8 @@ int main(int argc, char *argv[])
 	int port = 1337;
 	char hostname[HOST_NAME_MAX+1] = "localhost";
 	hostname[HOST_NAME_MAX] = 0;
-	bool isclient = true;
+	// bool isclient = true;
+	isclient = true;
 
 	while ((c = getopt_long(argc, argv, "c:lp:h", long_opts, &opt_index)) != -1) {
 		switch (c) {
