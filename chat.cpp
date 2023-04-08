@@ -276,6 +276,20 @@ static void msg_typed(char *line)
 			add_history(line);
 			mymsg = string(line);
 			transcript.push_back("me: " + mymsg);
+			const size_t klen = 128;
+			/* Alice's key derivation: */
+			unsigned char kA[klen];
+			dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+			/* Bob's key derivation: */
+			unsigned char kB[klen];
+			dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+			/* make sure they are the same: */
+			if (memcmp(kA,kB,klen) == 0) {
+				log("Alice and Bob have the same key :D\n");
+			} else {
+				log("T.T\n");
+			}
 			ssize_t nbytes;
 			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
 				error("send failed");
