@@ -52,11 +52,22 @@ static deque<string> transcript;
 
 int listensock, sockfd;
 
+static bool should_exit = false;
+
+// global variables for pks and sks
+mpz_t global_user1_pk;
+mpz_t global_user1_sk;
+mpz_t global_user2_pk;
+mpz_t global_user2_sk;
+
+const size_t klen = 128;
+unsigned char kA[klen];
+unsigned char kB[klen];
 /**
  * Write a log message to a text file
  * @author Chenhao L.
 */
-int log(char* message, char* filename = "log.txt") {
+int log(const char* message, const char* filename = "log.txt") {
     
     // check to make sure file name exists
     FILE *logFile = fopen(filename, "r");
@@ -69,7 +80,7 @@ int log(char* message, char* filename = "log.txt") {
             return 1;
         }
 
-        fprintf(newLogFile, "Beginning of the log file\n");
+        fprintf(newLogFile, "--Beginning of the log file--\n");
 
         fclose(newLogFile);
     } else fclose(logFile);
@@ -96,11 +107,21 @@ int log(char* message, char* filename = "log.txt") {
 	fail_exit("");
 }
 
+static int shutdownNetwork()
+{
+	shutdown(sockfd,2);
+	unsigned char dummy[64];
+	ssize_t r;
+	do {
+		r = recv(sockfd,dummy,64,0);
+	} while (r != 0 && r != -1);
+	close(sockfd);
+	return 0;
+}
+
 // required handshake with the client
 int initServerNet(int port)
 {
-
-	
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
 	listensock = socket(AF_INET, SOCK_STREAM, 0);
@@ -124,7 +145,48 @@ int initServerNet(int port)
 	close(listensock);
 	fprintf(stderr, "connection made, starting session...\n");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init server success");
+	log("initServerNet: Successfully connected to server");
+	
+	if (init("params") != 0) {
+		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+
+		should_exit = true;
+
+		// instead of shutting down the program when keys cannot be generated, in the future
+		// there should be a feature that informs both users that the chat is not encrypted and unsecured
+		// - Chenhao L.
+	}
+
+	// generate user 2 key
+	NEWZ(global_user2_sk);
+	NEWZ(global_user2_pk);
+	if(dhGen(global_user2_sk, global_user2_pk) != 0) {
+		log("Something went wrong in dhGen() on the server, did you run the init() function?");
+
+		// exit the program
+		should_exit = true;
+	}
+
+	// dhGen(global_user2_sk, global_user2_pk);
+
+	size_t mpf_out_str (FILE *stream, int base, size_t n_digits, const mpf_t global_user2_pk);
+
+	dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+	if (memcmp(kA,kB,klen) == 0) {
+		printf("Alice and Bob have the same key :D\n");
+	} else {
+		// printf("\n");
+		printf("Bob's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			printf("%02x ",kB[i]);
+		}
+		shutdownNetwork();
+		// deinit_ncurses();
+		// deinit_readline();	
+	}
+
 	return 0;
 }
 
@@ -148,20 +210,42 @@ static int initClientNet(char* hostname, int port)
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
 		error("ERROR connecting");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init client success");
 
-	return 0;
-}
+	// connection successful with the client and server
+	// since client goes first, call the init func
+	log("initClientNet Line 154: Successfully connected to client");
 
-static int shutdownNetwork()
-{
-	shutdown(sockfd,2);
-	unsigned char dummy[64];
-	ssize_t r;
-	do {
-		r = recv(sockfd,dummy,64,0);
-	} while (r != 0 && r != -1);
-	close(sockfd);
+	if (init("params") != 0) {
+		log("initClientNet: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+		should_exit = true;
+	}
+
+	// generate user 1 key
+	NEWZ(global_user1_pk);
+	NEWZ(global_user1_sk);
+	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
+		log("Something went wrong in dhGen() on the client, did you run init() function?");
+
+		should_exit = true;
+	}
+
+	// dhGen(global_user1_sk, global_user1_pk);
+	dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+
+	if (memcmp(kA,kB,klen) == 0) {
+		printf("Alice and Bob have the same key :D\n");
+	} else {
+		printf("Alice's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			printf("%02x ",kA[i]);
+		}
+
+		shutdownNetwork();
+		// deinit_ncurses();
+		// deinit_readline();	
+	}
+	//not the same key
 	return 0;
 }
 
@@ -186,7 +270,6 @@ static int shutdownNetwork()
 	fail_exit(#fn"("#__VA_ARGS__") failed"); \
 	while (false)
 
-static bool should_exit = false;
 
 // Message window
 static WINDOW *msg_win;
