@@ -52,11 +52,27 @@ static deque<string> transcript;
 
 int listensock, sockfd;
 
+static bool should_exit = false;
+
+// global variables for pks and sks
+mpz_t global_user1_pk;
+mpz_t global_user1_sk;
+mpz_t global_user2_pk;
+mpz_t global_user2_sk;
+
+const size_t klen = 128;
+int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
+bool isclient; //turned global for convienence
+bool gotPK = false;
+bool varification = false;
+unsigned char kA[klen]; //client dhfinal
+unsigned char kB[klen]; //server dhfinal
+
 /**
  * Write a log message to a text file
  * @author Chenhao L.
 */
-int log(char* message, char* filename = "log.txt") {
+int log(const char* message, const char* filename = "log.txt") {
     
     // check to make sure file name exists
     FILE *logFile = fopen(filename, "r");
@@ -69,7 +85,7 @@ int log(char* message, char* filename = "log.txt") {
             return 1;
         }
 
-        fprintf(newLogFile, "Beginning of the log file\n");
+        fprintf(newLogFile, "--Beginning of the log file--\n");
 
         fclose(newLogFile);
     } else fclose(logFile);
@@ -99,8 +115,6 @@ int log(char* message, char* filename = "log.txt") {
 // required handshake with the client
 int initServerNet(int port)
 {
-
-	
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
 	listensock = socket(AF_INET, SOCK_STREAM, 0);
@@ -124,7 +138,40 @@ int initServerNet(int port)
 	close(listensock);
 	fprintf(stderr, "connection made, starting session...\n");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init server success");
+	log("initServerNet: Successfully connected to server");
+	
+	if (init("params") != 0) {
+		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+
+		should_exit = true;
+
+		// instead of shutting down the program when keys cannot be generated, in the future
+		// there should be a feature that informs both users that the chat is not encrypted and unsecured
+		// - Chenhao L.
+	}
+
+	// generate user 2 key
+	NEWZ(global_user2_sk);
+	NEWZ(global_user2_pk);
+	if(dhGen(global_user2_sk, global_user2_pk) != 0) {
+		log("Something went wrong in dhGen() on the server, did you run the init() function?");
+
+		// exit the program
+		should_exit = true;
+	}
+
+	//store public key 2 (g^a mod p) to file "PublicKeyServer". 
+	FILE *pk2 = fopen("PublicKeyServer", "w");
+	mpz_out_str(pk2, base, global_user2_pk);
+	fclose(pk2);
+
+	// //read from file to get other persons public key 1.
+	// FILE *pk1 = fopen("PublicKeyClient", "r");
+	// mpz_inp_str(global_user1_pk, pk1, base);
+	// fclose(pk1);
+	// error: dhfinal output becomes all zeros
+
 	return 0;
 }
 
@@ -148,7 +195,36 @@ static int initClientNet(char* hostname, int port)
 	if (connect(sockfd,(struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0)
 		error("ERROR connecting");
 	/* at this point, should be able to send/recv on sockfd */
-	log("init client success");
+
+	// connection successful with the client and server
+	// since client goes first, call the init func
+	log("initClientNet Line 154: Successfully connected to client");
+
+	if (init("params") != 0) {
+		log("initClientNet: Cannot init Diffie Hellman key exchange :(");
+		printf("Cannot init Diffie Hellman key exchange :(");
+		should_exit = true;
+	}
+
+	// generate user 1 key
+	NEWZ(global_user1_sk);
+	NEWZ(global_user1_pk);
+	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
+		log("Something went wrong in dhGen() on the client, did you run init() function?");
+
+		should_exit = true;
+	}
+
+	//store public key 1 (g^b mod p) to file "PublicKeyClient". 
+	FILE *pk1 = fopen("PublicKeyClient", "w");
+	mpz_out_str(pk1, base, global_user1_pk);
+	fclose(pk1);
+
+	// //read from file to get other persons public key 2.
+	// FILE *pk2 = fopen("PublicKeyServer", "r");
+	// mpz_inp_str(global_user2_pk, pk2, base);
+	// fclose(pk2); 
+	// error: dhfinal output becomes all zeros
 
 	return 0;
 }
@@ -186,7 +262,6 @@ static int shutdownNetwork()
 	fail_exit(#fn"("#__VA_ARGS__") failed"); \
 	while (false)
 
-static bool should_exit = false;
 
 // Message window
 static WINDOW *msg_win;
@@ -220,6 +295,88 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 
 static void msg_typed(char *line)
 {
+	// /* Alice's key derivation: */
+	// unsigned char kA[klen];
+	// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+	// /* Bob's key derivation: */
+	// unsigned char kB[klen];
+	// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+	// printf("Alice's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		printf("%02x ",kA[i]);
+	// 	}
+	// printf("\n");
+	// printf("Bob's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		printf("%02x ",kB[i]);
+	// }
+	/*exact same code, every time. 
+	d0 6b 94 ca bb 8c b0 da 5c 08 c7 2f e2 5a a9 37 61 c6 70 ab 0b ce 75 4b 87 8c d9 89 4e 4f 65 fe e6 b1 c1 aa d5 82 e8 78 ae ed 5a ee ab 9b 60 bb 3b
+	 69 2c 64 99 93 a0 d3 3a 2a d7 2d e7 68 ac fa 33 8a ab 42 fa cf 83 36 8b bd 08 ad d5 29 03 27 18 42 b5 f2 73 0b d9 13 f6 03 14 6e 53 c1 ae 34 3a 
+	 a1 d9 a2 87 cf 2c b0 b4 2b f0 51 23 f1 1f 85 af 70 05 f0 d7 4a 46 d5 7d 45 95 eb a9 2a bc 9a
+	*/
+
+	if(isclient && !gotPK)
+	{
+		//read from file to get other persons public key 2.
+		FILE *pk2 = fopen("PublicKeyServer", "r");
+		mpz_inp_str(global_user2_pk, pk2, base);
+		fclose(pk2);
+		gotPK = true;
+		//Get DH
+		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH1 = fopen("DH1-PK2", "w");
+		mpz_out_str(DH1, base, global_user2_pk);
+		fclose(DH1);
+		// verified: received correct pk
+	}
+	else if (!isclient && !gotPK)
+	{
+		//read from file to get other persons public key 1.
+		FILE *pk1 = fopen("PublicKeyClient", "r");
+		mpz_inp_str(global_user1_pk, pk1, base);
+		fclose(pk1);
+		gotPK = true;
+		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kB[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH2 = fopen("DH2-PK1", "w");
+		mpz_out_str(DH2, base, global_user1_pk);
+		fclose(DH2); 
+		//verified: received correct pk
+	}
+
+	if(isclient)
+	{
+		log("client's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			char text[10];
+			sprintf(text, "%02x", kA[i]);
+			log(text);
+		}
+	}
+
+	else
+	{
+		log("\nserver's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			char text[10];
+			sprintf(text, "%02x", kB[i]);
+			log(text);
+		}
+		
+	}
+
+
 	string mymsg;
 	if (!line) {
 		// Ctrl-D pressed on empty line
@@ -231,6 +388,21 @@ static void msg_typed(char *line)
 			add_history(line);
 			mymsg = string(line);
 			transcript.push_back("me: " + mymsg);
+			// const size_t klen = 128;
+			/* Alice's key derivation: */
+			// unsigned char kA[klen];
+			// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+			/* Bob's key derivation: */
+			// unsigned char kB[klen];
+			// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+
+			/* make sure they are the same: */
+			// if (memcmp(kA,kB,klen) == 0) {
+			// 	log("Alice and Bob have the same key :D\n");
+			// } else {
+			// 	log("T.T\n");
+			// }
+
 			ssize_t nbytes;
 			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
 				error("send failed");
@@ -397,7 +569,8 @@ int main(int argc, char *argv[])
 	int port = 1337;
 	char hostname[HOST_NAME_MAX+1] = "localhost";
 	hostname[HOST_NAME_MAX] = 0;
-	bool isclient = true;
+	// bool isclient = true;
+	isclient = true;
 
 	while ((c = getopt_long(argc, argv, "c:lp:h", long_opts, &opt_index)) != -1) {
 		switch (c) {
