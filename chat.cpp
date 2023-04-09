@@ -161,13 +161,13 @@ int initServerNet(int port)
 		should_exit = true;
 	}
 
-	//store public key 2 (g^a mod p) to file "PublicKey2". 
-	FILE *pk2 = fopen("PublicKey2", "w");
+	//store public key 2 (g^a mod p) to file "PublicKeyServer". 
+	FILE *pk2 = fopen("PublicKeyServer", "w");
 	mpz_out_str(pk2, base, global_user2_pk);
 	fclose(pk2);
 
 	// //read from file to get other persons public key 1.
-	// FILE *pk1 = fopen("PublicKey1", "r");
+	// FILE *pk1 = fopen("PublicKeyClient", "r");
 	// mpz_inp_str(global_user1_pk, pk1, base);
 	// fclose(pk1);
 	// error: dhfinal output becomes all zeros
@@ -215,13 +215,13 @@ static int initClientNet(char* hostname, int port)
 		should_exit = true;
 	}
 
-	//store public key 1 (g^b mod p) to file "PublicKey1". 
-	FILE *pk1 = fopen("PublicKey1", "w");
+	//store public key 1 (g^b mod p) to file "PublicKeyClient". 
+	FILE *pk1 = fopen("PublicKeyClient", "w");
 	mpz_out_str(pk1, base, global_user1_pk);
 	fclose(pk1);
 
 	// //read from file to get other persons public key 2.
-	// FILE *pk2 = fopen("PublicKey2", "r");
+	// FILE *pk2 = fopen("PublicKeyServer", "r");
 	// mpz_inp_str(global_user2_pk, pk2, base);
 	// fclose(pk2); 
 	// error: dhfinal output becomes all zeros
@@ -320,7 +320,7 @@ static void msg_typed(char *line)
 	if(isclient && !gotPK)
 	{
 		//read from file to get other persons public key 2.
-		FILE *pk2 = fopen("PublicKey2", "r");
+		FILE *pk2 = fopen("PublicKeyServer", "r");
 		mpz_inp_str(global_user2_pk, pk2, base);
 		fclose(pk2);
 		gotPK = true;
@@ -339,7 +339,7 @@ static void msg_typed(char *line)
 	else if (!isclient && !gotPK)
 	{
 		//read from file to get other persons public key 1.
-		FILE *pk1 = fopen("PublicKey1", "r");
+		FILE *pk1 = fopen("PublicKeyClient", "r");
 		mpz_inp_str(global_user1_pk, pk1, base);
 		fclose(pk1);
 		gotPK = true;
@@ -357,17 +357,21 @@ static void msg_typed(char *line)
 
 	if(isclient)
 	{
-		printf("\nAlice's key:\n");
+		log("client's key:\n");
 		for (size_t i = 0; i < klen; i++) {
-			printf("%02x ",kA[i]);
+			char text[10];
+			sprintf(text, "%02x", kA[i]);
+			log(text);
 		}
 	}
 
 	else
 	{
-		printf("\nBob's key:\n");
+		log("\nserver's key:\n");
 		for (size_t i = 0; i < klen; i++) {
-			printf("%02x ",kB[i]);
+			char text[10];
+			sprintf(text, "%02x", kB[i]);
+			log(text);
 		}
 		
 	}

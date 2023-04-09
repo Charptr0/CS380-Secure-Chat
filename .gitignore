@@ -9,3 +9,12 @@ dh-example
 
 # logs
 log.txt
+
+# keys
+PublicKeyClient
+PublicKeyServer
+
+# misc
+DH1-PK2
+DH2-PK1
+
