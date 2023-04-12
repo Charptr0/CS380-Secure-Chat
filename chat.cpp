@@ -107,6 +107,33 @@ int log(const char* message, const char* filename = "log.txt") {
 }
 
 /**
+ * Log the encrypted message in bytes to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(unsigned char encryptedMessage[64]) {
+	log("Logging the encrypted message in bytes...");
+	
+	for(size_t i = 0; i < 64; i++) {
+		char* text = (char*)malloc(3 * sizeof(char));
+		sprintf(text, "%02x", encryptedMessage[i]);
+		log(text);
+		free(text);
+	}
+
+	log("Finished logging the encrypted message in bytes");
+}
+
+/**
+ * Log the encrypted message encoded in base64 to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(const char* encryptedMessage) {
+	log("Logging the encrypted message in base 64");
+	log(encryptedMessage);
+	log("Finished logging the encrypted message in base 64");
+}
+
+/**
  * Encrypt a string using HMAC encryption
  * @param message - The string to encrypt
  * @param key - the secret key of the current user
@@ -122,6 +149,8 @@ char* encryptMessage(const char* message, const char* key) {
 	// add HMAC encryption
 	memset(mac,0,64);
 	HMAC(EVP_sha512(),key,key_len,(unsigned char*)message, msg_len,mac,0);
+
+	logEncryptedMessage(mac);
 
 	// encode the string into base64
 	BIO* bio = BIO_new(BIO_s_mem());
@@ -139,8 +168,35 @@ char* encryptMessage(const char* message, const char* key) {
 	base64_mac[mem->length] = '\0';
 	BIO_free_all(base64);
 
+	logEncryptedMessage(base64_mac);
 	// encode bytes into b64
 	return base64_mac;
+}
+
+/**
+ * Decrypt the encoded message with the corresponding key
+ * @author Chenhao L.
+ * @author ???
+*/
+char* decryptMessage(const char* encodedMessage, const char* key) {
+	size_t encodedMessage_len = strlen(encodedMessage);
+	logEncryptedMessage(encodedMessage);
+
+	// decode the encoded b64 string back into bytes
+	BIO* bio = BIO_new_mem_buf(encodedMessage, encodedMessage_len);
+	BIO* base64 = BIO_new(BIO_f_base64());
+	BIO_push(base64, bio);
+
+	unsigned char encodedMessageInBytes[64];
+	BIO_read(base64, encodedMessageInBytes, encodedMessage_len);
+	BIO_free_all(base64);
+
+	// now the message should be in bytes instead of b64
+	// decryption happens here
+
+	logEncryptedMessage(encodedMessageInBytes);
+
+	return NULL;
 }
 
 [[noreturn]] static void fail_exit(const char *msg);
@@ -405,7 +461,9 @@ static void msg_typed(char *line)
 		if (*line) {
 			// NOTE: please update the key params from "1234" to the other user's pk
 			// waiting on that
-			char* encrypted_line = encryptMessage(line, "1234");
+			// if the client, then encrypt using the server's kA
+			// if not client, then encrypt using the client's kB
+			char* encrypted_line = isclient ? encryptMessage(line, "1234") : encryptMessage(line, "1234");
 
 			add_history(encrypted_line);
 
@@ -708,7 +766,10 @@ void* recvMsg(void*)
 			/* signal to the main loop that we should quit: */
 			should_exit = true;
 			return 0;
-		}
+		} 
+
+		// decrypt the message here
+		const char* decryptedMessage = decryptMessage(msg, "1234");
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,msg,"Mr Thread",msg_win});
 		pthread_cond_signal(&qcv);
