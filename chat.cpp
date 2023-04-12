@@ -11,6 +11,8 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/bio.h> // encode to base64
+#include <openssl/buffer.h>
 #include <string.h>
 #include <getopt.h>
 #include <string>
@@ -102,6 +104,43 @@ int log(const char* message, const char* filename = "log.txt") {
 	fclose(fp);
 
     return 0;
+}
+
+/**
+ * Encrypt a string using HMAC encryption
+ * @param message - The string to encrypt
+ * @param key - the secret key of the current user
+ * @return the encrypted message encoded in base64
+ * @author Chenhao L.
+*/
+char* encryptMessage(const char* message, const char* key) {
+	unsigned char mac[64];
+	
+	size_t msg_len = strlen(message);
+	size_t key_len = strlen(key);
+
+	// add HMAC encryption
+	memset(mac,0,64);
+	HMAC(EVP_sha512(),key,key_len,(unsigned char*)message, msg_len,mac,0);
+
+	// encode the string into base64
+	BIO* bio = BIO_new(BIO_s_mem());
+	BIO* base64 = BIO_new(BIO_f_base64());
+
+	// wtf is this
+	BIO_push(base64, bio);
+	BIO_write(base64, mac, 64);
+	BIO_flush(base64);
+
+	BUF_MEM* mem = NULL;
+	BIO_get_mem_ptr(bio, &mem);
+	char* base64_mac = (char*)malloc(mem->length + 1);
+	memcpy(base64_mac, mem->data, mem->length);
+	base64_mac[mem->length] = '\0';
+	BIO_free_all(base64);
+
+	// encode bytes into b64
+	return base64_mac;
 }
 
 [[noreturn]] static void fail_exit(const char *msg);
@@ -295,28 +334,6 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 
 static void msg_typed(char *line)
 {
-	// /* Alice's key derivation: */
-	// unsigned char kA[klen];
-	// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-	// /* Bob's key derivation: */
-	// unsigned char kB[klen];
-	// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-
-	// printf("Alice's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kA[i]);
-	// 	}
-	// printf("\n");
-	// printf("Bob's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kB[i]);
-	// }
-	/*exact same code, every time. 
-	d0 6b 94 ca bb 8c b0 da 5c 08 c7 2f e2 5a a9 37 61 c6 70 ab 0b ce 75 4b 87 8c d9 89 4e 4f 65 fe e6 b1 c1 aa d5 82 e8 78 ae ed 5a ee ab 9b 60 bb 3b
-	 69 2c 64 99 93 a0 d3 3a 2a d7 2d e7 68 ac fa 33 8a ab 42 fa cf 83 36 8b bd 08 ad d5 29 03 27 18 42 b5 f2 73 0b d9 13 f6 03 14 6e 53 c1 ae 34 3a 
-	 a1 d9 a2 87 cf 2c b0 b4 2b f0 51 23 f1 1f 85 af 70 05 f0 d7 4a 46 d5 7d 45 95 eb a9 2a bc 9a
-	*/
-
 	if(isclient && !gotPK)
 	{
 		//read from file to get other persons public key 2.
@@ -377,7 +394,8 @@ static void msg_typed(char *line)
 	}
 
 
-	string mymsg;
+	string my_encrypted_msg;
+	string line_str;
 	if (!line) {
 		// Ctrl-D pressed on empty line
 		should_exit = true;
@@ -385,30 +403,23 @@ static void msg_typed(char *line)
 		 * have to wait for timeout on recv()? */
 	} else {
 		if (*line) {
-			add_history(line);
-			mymsg = string(line);
-			transcript.push_back("me: " + mymsg);
-			// const size_t klen = 128;
-			/* Alice's key derivation: */
-			// unsigned char kA[klen];
-			// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-			/* Bob's key derivation: */
-			// unsigned char kB[klen];
-			// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+			// NOTE: please update the key params from "1234" to the other user's pk
+			// waiting on that
+			char* encrypted_line = encryptMessage(line, "1234");
 
-			/* make sure they are the same: */
-			// if (memcmp(kA,kB,klen) == 0) {
-			// 	log("Alice and Bob have the same key :D\n");
-			// } else {
-			// 	log("T.T\n");
-			// }
+			add_history(encrypted_line);
+
+			my_encrypted_msg = string(encrypted_line);
+			line_str = string(line);
+			
+			transcript.push_back("me: " + line_str);
 
 			ssize_t nbytes;
-			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
+			if ((nbytes = send(sockfd,encrypted_line,my_encrypted_msg.length(),0)) == -1)
 				error("send failed");
 		}
 		pthread_mutex_lock(&qmx);
-		mq.push_back({false,mymsg,"me",msg_win});
+		mq.push_back({false,line_str,"me",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}
