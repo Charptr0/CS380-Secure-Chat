@@ -11,6 +11,8 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/bio.h> // encode to base64
+#include <openssl/buffer.h>
 #include <string.h>
 #include <getopt.h>
 #include <string>
@@ -102,6 +104,99 @@ int log(const char* message, const char* filename = "log.txt") {
 	fclose(fp);
 
     return 0;
+}
+
+/**
+ * Log the encrypted message in bytes to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(unsigned char encryptedMessage[64]) {
+	log("Logging the encrypted message in bytes...");
+	
+	for(size_t i = 0; i < 64; i++) {
+		char* text = (char*)malloc(3 * sizeof(char));
+		sprintf(text, "%02x", encryptedMessage[i]);
+		log(text);
+		free(text);
+	}
+
+	log("Finished logging the encrypted message in bytes");
+}
+
+/**
+ * Log the encrypted message encoded in base64 to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(const char* encryptedMessage) {
+	log("Logging the encrypted message in base 64");
+	log(encryptedMessage);
+	log("Finished logging the encrypted message in base 64");
+}
+
+/**
+ * Encrypt a string using HMAC encryption
+ * @param message - The string to encrypt
+ * @param key - the secret key of the current user
+ * @return the encrypted message encoded in base64
+ * @author Chenhao L.
+*/
+char* encryptMessage(const char* message, const char* key) {
+	unsigned char mac[64];
+	
+	size_t msg_len = strlen(message);
+	size_t key_len = strlen(key);
+
+	// add HMAC encryption
+	memset(mac,0,64);
+	HMAC(EVP_sha512(),key,key_len,(unsigned char*)message, msg_len,mac,0);
+
+	logEncryptedMessage(mac);
+
+	// encode the string into base64
+	BIO* bio = BIO_new(BIO_s_mem());
+	BIO* base64 = BIO_new(BIO_f_base64());
+
+	// wtf is this
+	BIO_push(base64, bio);
+	BIO_write(base64, mac, 64);
+	BIO_flush(base64);
+
+	BUF_MEM* mem = NULL;
+	BIO_get_mem_ptr(bio, &mem);
+	char* base64_mac = (char*)malloc(mem->length + 1);
+	memcpy(base64_mac, mem->data, mem->length);
+	base64_mac[mem->length] = '\0';
+	BIO_free_all(base64);
+
+	logEncryptedMessage(base64_mac);
+	// encode bytes into b64
+	return base64_mac;
+}
+
+/**
+ * Decrypt the encoded message with the corresponding key
+ * @author Chenhao L.
+ * @author ???
+*/
+char* decryptMessage(const char* encodedMessage, const char* key) {
+	size_t encodedMessage_len = strlen(encodedMessage);
+	logEncryptedMessage(encodedMessage);
+
+	// decode the encoded b64 string back into bytes
+	BIO* bio = BIO_new_mem_buf(encodedMessage, encodedMessage_len);
+	BIO* base64 = BIO_new(BIO_f_base64());
+	BIO_push(base64, bio);
+
+	unsigned char encodedMessageInBytes[64];
+	BIO_read(base64, encodedMessageInBytes, encodedMessage_len);
+	BIO_free_all(base64);
+
+	// now the message should be in bytes instead of b64
+	// decryption happens here
+
+	logEncryptedMessage(encodedMessageInBytes);
+
+	return NULL;
 }
 
 [[noreturn]] static void fail_exit(const char *msg);
@@ -450,6 +545,69 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 static void msg_typed(char *line)
 {
 	string mymsg;
+  
+	if(isclient && !gotPK)
+	{
+		//read from file to get other persons public key 2.
+		FILE *pk2 = fopen("PublicKeyServer", "r");
+		mpz_inp_str(global_user2_pk, pk2, base);
+		fclose(pk2);
+		gotPK = true;
+		//Get DH
+		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH1 = fopen("DH1-PK2", "w");
+		mpz_out_str(DH1, base, global_user2_pk);
+		fclose(DH1);
+		// verified: received correct pk
+	}
+	else if (!isclient && !gotPK)
+	{
+		//read from file to get other persons public key 1.
+		FILE *pk1 = fopen("PublicKeyClient", "r");
+		mpz_inp_str(global_user1_pk, pk1, base);
+		fclose(pk1);
+		gotPK = true;
+		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kB[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH2 = fopen("DH2-PK1", "w");
+		mpz_out_str(DH2, base, global_user1_pk);
+		fclose(DH2); 
+		//verified: received correct pk
+	}
+
+	if(isclient)
+	{
+		log("client's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			char text[10];
+			sprintf(text, "%02x", kA[i]);
+			log(text);
+		}
+	}
+
+	else
+	{
+		log("\nserver's key:\n");
+		for (size_t i = 0; i < klen; i++) {
+			char text[10];
+			sprintf(text, "%02x", kB[i]);
+			log(text);
+		}
+		
+	}
+
+
+	string my_encrypted_msg;
+	string line_str;
 	if (!line) {
 		// Ctrl-D pressed on empty line
 		should_exit = true;
@@ -457,30 +615,25 @@ static void msg_typed(char *line)
 		 * have to wait for timeout on recv()? */
 	} else {
 		if (*line) {
-			add_history(line);
-			mymsg = string(line);
-			transcript.push_back("me: " + mymsg);
-			// const size_t klen = 128;
-			/* Alice's key derivation: */
-			// unsigned char kA[klen];
-			// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-			/* Bob's key derivation: */
-			// unsigned char kB[klen];
-			// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+			// NOTE: please update the key params from "1234" to the other user's pk
+			// waiting on that
+			// if the client, then encrypt using the server's kA
+			// if not client, then encrypt using the client's kB
+			char* encrypted_line = isclient ? encryptMessage(line, "1234") : encryptMessage(line, "1234");
 
-			/* make sure they are the same: */
-			// if (memcmp(kA,kB,klen) == 0) {
-			// 	log("Alice and Bob have the same key :D\n");
-			// } else {
-			// 	log("T.T\n");
-			// }
+			add_history(encrypted_line);
+
+			my_encrypted_msg = string(encrypted_line);
+			line_str = string(line);
+			
+			transcript.push_back("me: " + line_str);
 
 			ssize_t nbytes;
-			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
+			if ((nbytes = send(sockfd,encrypted_line,my_encrypted_msg.length(),0)) == -1)
 				error("send failed");
 		}
 		pthread_mutex_lock(&qmx);
-		mq.push_back({false,mymsg,"me",msg_win});
+		mq.push_back({false,line_str,"me",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}
@@ -769,7 +922,10 @@ void* recvMsg(void*)
 			/* signal to the main loop that we should quit: */
 			should_exit = true;
 			return 0;
-		}
+		} 
+
+		// decrypt the message here
+		const char* decryptedMessage = decryptMessage(msg, "1234");
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,msg,"Mr Thread",msg_win});
 		pthread_cond_signal(&qcv);
