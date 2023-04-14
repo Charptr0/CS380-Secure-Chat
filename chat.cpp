@@ -163,6 +163,9 @@ int initServerNet(int port)
 		error("error on accept");
 	else
 	{
+		// //wait for client to write their dhF
+		// usleep(2000000);//sleeps for 2 second
+		
 		//Get client public key
 		FILE *pk1 = fopen("PublicKeyClient", "r");
 		mpz_inp_str(global_user1_pk, pk1, base);
@@ -177,19 +180,36 @@ int initServerNet(int port)
 
 		FILE *Server_dh = fopen("Server_dh", "wb"); //write in binary format
 		size_t r1 = fwrite(kB, sizeof kB[0], klen, Server_dh);
+		if(r1 < 0)
+		{
+			perror("fwrite");
+			exit(-1);
+		}
 		fclose(Server_dh);
-
-		//wait for client to write their dhF
-		usleep(2000000);//sleeps for 1 second
 
 		unsigned char kC[klen];
 
 		FILE *Client_dh = fopen("Client_dh", "rb"); 
 		size_t r2 = fread(kC, sizeof kC[0], klen, Client_dh);
+		if(r2 < 0)
+		{
+			perror("fwrite");
+			exit(-1);
+		}		
 		fclose(Client_dh);
+
+		// printf("\nServer SH\n");
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kB[i]);
+		// }
+		// printf("\nClient SH\n");
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kC[i]);
+		// }
 
 		if (memcmp(kB,kC,klen) != 0)
 		{
+			printf("\nError: Client did not match server dh\n");
 			printf("\nServer SH\n");
 			for (size_t i = 0; i < klen; i++) {
 				printf("%02x ",kB[i]);
@@ -198,13 +218,15 @@ int initServerNet(int port)
 			for (size_t i = 0; i < klen; i++) {
 				printf("%02x ",kC[i]);
 			}
-
-			printf("\nError: Client did not match server dh\n");
-			should_exit = true;
+			// should_exit = true;
+			printf("\n");
 			exit(-1);
 		}
 
 		memset(kC, 0, sizeof(kC)); //erase information
+
+		// //wait for client to write their dhF
+		// usleep(1000000);//sleeps for 2 second
 	}
 	close(listensock);
 
@@ -265,9 +287,9 @@ static int initClientNet(char* hostname, int port)
 		fclose(pk2);
 
 		//check if they got correct pk by printing in different file
-		FILE *DH1 = fopen("DH1-PK2", "w");
-		mpz_out_str(DH1, base, global_user2_pk);
-		fclose(DH1);
+		// FILE *DH1 = fopen("DH1-PK2", "w");
+		// mpz_out_str(DH1, base, global_user2_pk);
+		// fclose(DH1);
 
 		//Get DH
 		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
@@ -275,34 +297,82 @@ static int initClientNet(char* hostname, int port)
 		// 	printf("%02x ",kA[i]);
 		// }
 
-		FILE *Client_dh = fopen("Client_dh", "wb"); //write in binary format
+		//write to file ClientDH in binary format
+		FILE *Client_dh = fopen("Client_dh", "wb"); 
 		size_t r1 = fwrite(kA, sizeof kA[0], klen, Client_dh);
+		if(r1 < 0)
+		{
+			perror("fwrite");
+			exit(-1);
+		}
 		fclose(Client_dh);
 
 		unsigned char kC[klen];
 
+		// //wait for server to finish comparison
+		// usleep(2000000);//sleeps for 2 second //works better without trying to time it.
+
 		FILE *Server_dh = fopen("Server_dh", "rb"); 
 		size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
+		if(r2 < 0)
+		{
+			perror("fwrite");
+			exit(-1);
+		}
 		fclose(Server_dh);
+
+		// printf("Client SH\n");
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+		// printf("\nServer SH\n");
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kC[i]);
+		// }	
 
 		if (memcmp(kA,kC,klen) != 0)
 		{
-			printf("\nError: Server did not match client dh\n");
-			printf("Client SH\n");
-				for (size_t i = 0; i < klen; i++) {
-				printf("%02x ",kA[i]);
+			sleep(1);
+			//Client is weird
+			FILE *Server_dh = fopen("Server_dh", "rb"); 
+			size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
+			if(r2 < 0)
+			{
+				perror("fwrite");
+				exit(-1);
 			}
-			printf("\nServer SH\n");
-			for (size_t i = 0; i < klen; i++) {
-				printf("%02x ",kC[i]);
-			}	
-			// should_exit = true;
-			exit(-1);
+			fclose(Server_dh);
+			
+			if (memcmp(kA,kC,klen) != 0)
+			{
+				printf("\nError: Server did not match client dh\n");
+				printf("Client SH\n");
+					for (size_t i = 0; i < klen; i++) {
+					printf("%02x ",kA[i]);
+				}
+				printf("\nServer SH\n");
+				for (size_t i = 0; i < klen; i++) {
+					printf("%02x ",kC[i]);
+				}	
+				// should_exit = true;
+				printf("\n");
+				exit(-1);
+			}
+
+			// printf("\nError: Server did not match client dh\n");
+			// printf("Client SH\n");
+			// 	for (size_t i = 0; i < klen; i++) {
+			// 	printf("%02x ",kA[i]);
+			// }
+			// printf("\nServer SH\n");
+			// for (size_t i = 0; i < klen; i++) {
+			// 	printf("%02x ",kC[i]);
+			// }	
+			// // should_exit = true;
+			// printf("\n");
+			// exit(-1);
 		}
 		memset(kC, 0, sizeof(kC)); //erase information
-	
-		//wait for server to finish comparison
-		usleep(2000000);//sleeps for 1 second
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
