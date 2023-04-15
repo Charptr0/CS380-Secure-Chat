@@ -13,6 +13,8 @@
 #include <openssl/hmac.h>
 #include <openssl/bio.h> // encode to base64
 #include <openssl/buffer.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <string.h>
 #include <getopt.h>
 #include <string>
@@ -62,6 +64,17 @@ mpz_t global_user1_sk;
 mpz_t global_user2_pk;
 mpz_t global_user2_sk;
 
+// global rsa keys
+RSA* server_rsa_keys;
+RSA* client_rsa_keys;
+
+int global_encryptedMessageLen = 256;
+int global_encodedMessageLen = 256;
+
+// file paths
+const char* CLIENT_PUBLIC_RSA_KEY_PATH = "clientPublicRSAKey.pem";
+const char* SERVER_PUBLIC_RSA_KEY_PATH = "serverPublicRSAKey.pem";
+
 const size_t klen = 128;
 int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
 bool isclient; //turned global for convienence
@@ -110,10 +123,10 @@ int log(const char* message, const char* filename = "log.txt") {
  * Log the encrypted message in bytes to log.txt
  * @author Chenhao L.
 */
-void logEncryptedMessage(unsigned char encryptedMessage[64]) {
+void logEncryptedMessage(unsigned char* encryptedMessage, size_t len) {
 	log("Logging the encrypted message in bytes...");
 	
-	for(size_t i = 0; i < 64; i++) {
+	for(size_t i = 0; i < len; i++) {
 		char* text = (char*)malloc(3 * sizeof(char));
 		sprintf(text, "%02x", encryptedMessage[i]);
 		log(text);
@@ -134,69 +147,123 @@ void logEncryptedMessage(const char* encryptedMessage) {
 }
 
 /**
- * Encrypt a string using HMAC encryption
- * @param message - The string to encrypt
- * @param key - the secret key of the current user
- * @return the encrypted message encoded in base64
+ * Convert the encrypted bytes into base 64 to transfer across the channel
+ * @param bytes - The encrypted bits
+ * @param len - the size of the bits
+ * @return the encrypted message encoded in base64 
  * @author Chenhao L.
 */
-char* encryptMessage(const char* message, const char* key) {
-	unsigned char mac[64];
-	
-	size_t msg_len = strlen(message);
-	size_t key_len = strlen(key);
-
-	// add HMAC encryption
-	memset(mac,0,64);
-	HMAC(EVP_sha512(),key,key_len,(unsigned char*)message, msg_len,mac,0);
-
-	logEncryptedMessage(mac);
-
+char* convertBytesToBase64(unsigned char* bytes, size_t len) {
 	// encode the string into base64
 	BIO* bio = BIO_new(BIO_s_mem());
 	BIO* base64 = BIO_new(BIO_f_base64());
 
-	// wtf is this
+	// i dont understand any of this but it works
 	BIO_push(base64, bio);
-	BIO_write(base64, mac, 64);
+	BIO_write(base64, bytes, len);
 	BIO_flush(base64);
 
 	BUF_MEM* mem = NULL;
 	BIO_get_mem_ptr(bio, &mem);
-	char* base64_mac = (char*)malloc(mem->length + 1);
-	memcpy(base64_mac, mem->data, mem->length);
-	base64_mac[mem->length] = '\0';
+	char* base64EncodedMessage = (char*)malloc(mem->length + 1);
+	memcpy(base64EncodedMessage, mem->data, mem->length);
+	base64EncodedMessage[mem->length] = '\0';
 	BIO_free_all(base64);
 
-	logEncryptedMessage(base64_mac);
-	// encode bytes into b64
-	return base64_mac;
+	return base64EncodedMessage;
 }
 
 /**
- * Decrypt the encoded message with the corresponding key
+ * Convert the base64 encoded message back into encrypted bytes
+ * @param encodedMessage - the base64 encoded message
+ * @return the encrypted message in bytes
  * @author Chenhao L.
- * @author ???
 */
-char* decryptMessage(const char* encodedMessage, const char* key) {
+unsigned char* convertBase64ToBytes(const char* encodedMessage) {
 	size_t encodedMessage_len = strlen(encodedMessage);
-	logEncryptedMessage(encodedMessage);
 
 	// decode the encoded b64 string back into bytes
 	BIO* bio = BIO_new_mem_buf(encodedMessage, encodedMessage_len);
 	BIO* base64 = BIO_new(BIO_f_base64());
 	BIO_push(base64, bio);
 
-	unsigned char encodedMessageInBytes[64];
+	unsigned char* encodedMessageInBytes = (unsigned char*)malloc(global_encryptedMessageLen * sizeof(char));
 	BIO_read(base64, encodedMessageInBytes, encodedMessage_len);
 	BIO_free_all(base64);
 
-	// now the message should be in bytes instead of b64
-	// decryption happens here
+	return encodedMessageInBytes;
+}
 
-	logEncryptedMessage(encodedMessageInBytes);
+/**
+ * Generate a RSA using the boiler plate code provide in openssl-examples
+ * @return a new RSA key
+*/
+RSA* generateRSAKeys() {
+	RSA* keys = RSA_new();
+	if (!keys) exit(1);
+	BIGNUM* e = BN_new();
+	if (!e) exit(1);
+	BN_set_word(e,RSA_F4); /* e = 65537  */
+	/* NOTE: if you have an old enough openssl library, you might
+	 * have to setup the random number generator before this call: */
+	int r = RSA_generate_key_ex(keys,2048,e,NULL);
+	if (r != 1) exit(1);
 
-	return NULL;
+	return keys;
+}
+
+/**
+ * Encrypt the incoming message with RSA encryption
+ * @param message - the message to encrypt
+ * @return the message encrypted using RSA and encoded in base64
+ * @author Chenhao L.
+*/
+char* encryptMessage(const char* message) {
+
+	const char* otherUserPublicKeyPath = isclient ? SERVER_PUBLIC_RSA_KEY_PATH : CLIENT_PUBLIC_RSA_KEY_PATH;
+
+	// read pk
+	FILE* fs = fopen(otherUserPublicKeyPath, "r");
+	if(fs == NULL) exit(1);
+
+	RSA* otherUserRSAPublicKey = PEM_read_RSA_PUBKEY(fs, NULL, NULL, NULL);
+
+	// encrypt using the other user's pk
+	size_t len = strlen(message);
+	unsigned char* encryptedMessage = (unsigned char*)malloc(RSA_size(otherUserRSAPublicKey));
+	int encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, otherUserRSAPublicKey, RSA_PKCS1_OAEP_PADDING);
+	if (encryptedMessageLen == -1) exit(1);
+
+	fclose(fs);
+
+	global_encryptedMessageLen = encryptedMessageLen;
+
+	// encode into base64
+	return convertBytesToBase64(encryptedMessage, encryptedMessageLen);
+}
+
+/**
+ * Decrypt the incoming message
+ * @param encodedMessage - the incoming message from the other user
+ * @return the decrypted message in plain text
+ * @author Chenhao L.
+*/
+char* decryptMessage(const char* encodedMessage) {
+	// decrypt the base64 encoded msg
+	unsigned char* encryptedMessageInBytes = convertBase64ToBytes(encodedMessage);
+
+	// decrypt the encrytion by using the user's private key
+	RSA* keys = isclient ? client_rsa_keys : server_rsa_keys;
+
+	char* pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
+	size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,keys, RSA_PKCS1_OAEP_PADDING);
+
+	if(ptlen == -1) {
+		should_exit = true;
+		exit(1);
+	}
+
+	return pt;
 }
 
 [[noreturn]] static void fail_exit(const char *msg);
@@ -319,6 +386,17 @@ int initServerNet(int port)
 		}
 
 		memset(kC, 0, sizeof(kC)); //erase information
+
+
+		// generate RSA key for the server
+		server_rsa_keys = generateRSAKeys();
+
+		// write the public key to file
+		FILE* serverPublicRSAKeyFs = fopen(SERVER_PUBLIC_RSA_KEY_PATH, "w");
+		if(serverPublicRSAKeyFs == NULL) exit(1);
+		PEM_write_RSA_PUBKEY(serverPublicRSAKeyFs, server_rsa_keys);
+		fclose(serverPublicRSAKeyFs);
+		
 
 		// //wait for client to write their dhF
 		// usleep(1000000);//sleeps for 2 second
@@ -468,12 +546,22 @@ static int initClientNet(char* hostname, int port)
 			// exit(-1);
 		}
 		memset(kC, 0, sizeof(kC)); //erase information
+
+		// generate RSA key for the client
+		client_rsa_keys = generateRSAKeys();
+
+		// write the public key to file
+		FILE* clientPublicRSAKeyFs = fopen(CLIENT_PUBLIC_RSA_KEY_PATH, "w");
+		if(clientPublicRSAKeyFs == NULL) exit(1);
+		PEM_write_RSA_PUBKEY(clientPublicRSAKeyFs, client_rsa_keys);
+		fclose(clientPublicRSAKeyFs);
+
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
 	// connection successful with the client and server
 	// since client goes first, call the init func
-	log("initClientNet Line 154: Successfully connected to client");
+	log("initClientNet: Successfully connected to client");
 
 	return 0;
 }
@@ -584,29 +672,27 @@ static void msg_typed(char *line)
 		//verified: received correct pk
 	}
 
-	if(isclient)
-	{
-		log("client's key:\n");
-		for (size_t i = 0; i < klen; i++) {
-			char text[10];
-			sprintf(text, "%02x", kA[i]);
-			log(text);
-		}
-	}
+	// if(isclient)
+	// {
+	// 	log("client's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		char text[10];
+	// 		sprintf(text, "%02x", kA[i]);
+	// 		log(text);
+	// 	}
+	// }
 
-	else
-	{
-		log("\nserver's key:\n");
-		for (size_t i = 0; i < klen; i++) {
-			char text[10];
-			sprintf(text, "%02x", kB[i]);
-			log(text);
-		}
+	// else
+	// {
+	// 	log("\nserver's key:\n");
+	// 	for (size_t i = 0; i < klen; i++) {
+	// 		char text[10];
+	// 		sprintf(text, "%02x", kB[i]);
+	// 		log(text);
+	// 	}
 		
-	}
+	// }
 
-
-	string my_encrypted_msg;
 	string line_str;
 	if (!line) {
 		// Ctrl-D pressed on empty line
@@ -619,17 +705,17 @@ static void msg_typed(char *line)
 			// waiting on that
 			// if the client, then encrypt using the server's kA
 			// if not client, then encrypt using the client's kB
-			char* encrypted_line = isclient ? encryptMessage(line, "1234") : encryptMessage(line, "1234");
+			char* encrypted_line = encryptMessage(line);
 
 			add_history(encrypted_line);
 
-			my_encrypted_msg = string(encrypted_line);
+			global_encodedMessageLen = strlen(encrypted_line);
 			line_str = string(line);
 			
 			transcript.push_back("me: " + line_str);
 
 			ssize_t nbytes;
-			if ((nbytes = send(sockfd,encrypted_line,my_encrypted_msg.length(),0)) == -1)
+			if ((nbytes = send(sockfd,encrypted_line, global_encodedMessageLen,0)) == -1)
 				error("send failed");
 		}
 		pthread_mutex_lock(&qmx);
@@ -911,11 +997,14 @@ void* cursesthread(void* pData)
 
 void* recvMsg(void*)
 {
-	size_t maxlen = 256;
-	char msg[maxlen+1];
+	// since we need to get the encoded message, the original 256 bit was too small
+	// hopefully 1024 is big enough :/ - Chenhao L.
+	const int BUFFER_SIZE = 1024;
+
+	char* msg = (char*)malloc(BUFFER_SIZE * sizeof(char));
 	ssize_t nbytes;
 	while (1) {
-		if ((nbytes = recv(sockfd,msg,maxlen,0)) == -1)
+		if ((nbytes = recv(sockfd,msg,BUFFER_SIZE,0)) == -1)
 			error("recv failed");
 		msg[nbytes] = 0; /* make sure it is null-terminated */
 		if (nbytes == 0) {
@@ -925,9 +1014,9 @@ void* recvMsg(void*)
 		} 
 
 		// decrypt the message here
-		const char* decryptedMessage = decryptMessage(msg, "1234");
+		char* decryptedMessage = decryptMessage(msg);
 		pthread_mutex_lock(&qmx);
-		mq.push_back({false,msg,"Mr Thread",msg_win});
+		mq.push_back({false,decryptedMessage,"Mr Thread",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}

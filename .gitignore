@@ -13,6 +13,9 @@ log.txt
 # keys
 PublicKeyClient
 PublicKeyServer
+Client_dh
+Server_dh
+*.pem
 
 # misc
 DH1-PK2
