@@ -59,10 +59,10 @@ int listensock, sockfd;
 static bool should_exit = false;
 
 // global variables for pks and sks
-mpz_t global_user1_pk;
-mpz_t global_user1_sk;
-mpz_t global_user2_pk;
-mpz_t global_user2_sk;
+mpz_t global_client_pk;
+mpz_t global_client_sk;
+mpz_t global_server_pk;
+mpz_t global_server_sk;
 
 // global rsa keys
 RSA* server_rsa_keys;
@@ -285,9 +285,9 @@ int initServerNet(int port)
 	}
 
 	// generate Server public key
-	NEWZ(global_user2_sk);
-	NEWZ(global_user2_pk);
-	if(dhGen(global_user2_sk, global_user2_pk) != 0) {
+	NEWZ(global_server_sk);
+	NEWZ(global_server_pk);
+	if(dhGen(global_server_sk, global_server_pk) != 0) {
 		log("Something went wrong in dhGen() on the server, did you run the init() function?");
 
 		// instead of shutting down the program when keys cannot be generated, in the future
@@ -300,7 +300,7 @@ int initServerNet(int port)
 	}
 	//store Server public key (g^a mod p) to file "PublicKeyServer". 
 	FILE *pk2 = fopen("PublicKeyServer", "w");
-	mpz_out_str(pk2, base, global_user2_pk);
+	mpz_out_str(pk2, base, global_server_pk);
 	fclose(pk2);
 
 	int reuse = 1;
@@ -325,20 +325,17 @@ int initServerNet(int port)
 		error("error on accept");
 	else
 	{
-		// //wait for client to write their dhF
-		// usleep(2000000);//sleeps for 2 second
-		
 		//Get client public key
 		FILE *pk1 = fopen("PublicKeyClient", "r");
-		mpz_inp_str(global_user1_pk, pk1, base);
-		fclose(pk1);
-		
-		//check if they got correct pk by printing in different file
-		// FILE *DH2 = fopen("DH2-PK1", "w");
-		// mpz_out_str(DH2, base, global_user1_pk);
-		// fclose(DH2); 
+		if(pk1 == NULL) {
+			error("Cannot read client dh key :(");
+			exit(1);
+		}
 
-		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		mpz_inp_str(global_client_pk, pk1, base);
+		fclose(pk1);
+
+		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
 
 		FILE *Server_dh = fopen("Server_dh", "wb"); //write in binary format
 		size_t r1 = fwrite(kB, sizeof kB[0], klen, Server_dh);
@@ -351,7 +348,18 @@ int initServerNet(int port)
 
 		unsigned char kC[klen];
 
+		// wait until the client dh_key has been fully created
+		// i know this is bad code but it works - Chenhao
+		while(access("Client_dh", F_OK) != 0) {
+			sleep(1);
+		}
+
 		FILE *Client_dh = fopen("Client_dh", "rb"); 
+		if(Client_dh == NULL) {
+			error("Cannot read client dh bytes :(");
+			exit(1);
+		}
+
 		size_t r2 = fread(kC, sizeof kC[0], klen, Client_dh);
 		if(r2 < 0)
 		{
@@ -360,14 +368,6 @@ int initServerNet(int port)
 		}		
 		fclose(Client_dh);
 
-		// printf("\nServer SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kB[i]);
-		// }
-		// printf("\nClient SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kC[i]);
-		// }
 
 		if (memcmp(kB,kC,klen) != 0)
 		{
@@ -397,9 +397,6 @@ int initServerNet(int port)
 		PEM_write_RSA_PUBKEY(serverPublicRSAKeyFs, server_rsa_keys);
 		fclose(serverPublicRSAKeyFs);
 		
-
-		// //wait for client to write their dhF
-		// usleep(1000000);//sleeps for 2 second
 	}
 	close(listensock);
 
@@ -422,9 +419,9 @@ static int initClientNet(char* hostname, int port)
 	}
 
 	// generate Client key
-	NEWZ(global_user1_sk);
-	NEWZ(global_user1_pk);
-	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
+	NEWZ(global_client_sk);
+	NEWZ(global_client_pk);
+	if(dhGen(global_client_sk, global_client_pk) != 0) {
 		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
 		// should_exit = true;
@@ -433,7 +430,7 @@ static int initClientNet(char* hostname, int port)
 
 	//store Client public key (g^b mod p) to file "PublicKeyClient". 
 	FILE *pk1 = fopen("PublicKeyClient", "w");
-	mpz_out_str(pk1, base, global_user1_pk);
+	mpz_out_str(pk1, base, global_client_pk);
 	fclose(pk1);
 
 	struct sockaddr_in serv_addr;
@@ -456,16 +453,16 @@ static int initClientNet(char* hostname, int port)
 	{
 		//read from file to get Server public key
 		FILE *pk2 = fopen("PublicKeyServer", "r");
-		mpz_inp_str(global_user2_pk, pk2, base);
+		if(pk2 == NULL) {
+			error("Cannot read server dh key :(");
+			exit(1);
+		}
+
+		mpz_inp_str(global_server_pk, pk2, base);
 		fclose(pk2);
 
-		//check if they got correct pk by printing in different file
-		// FILE *DH1 = fopen("DH1-PK2", "w");
-		// mpz_out_str(DH1, base, global_user2_pk);
-		// fclose(DH1);
-
 		//Get DH
-		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen);
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kA[i]);
 		// }
@@ -478,14 +475,22 @@ static int initClientNet(char* hostname, int port)
 			perror("fwrite");
 			exit(-1);
 		}
+
+		fflush(Client_dh);
 		fclose(Client_dh);
 
 		unsigned char kC[klen];
 
-		// //wait for server to finish comparison
-		// usleep(2000000);//sleeps for 2 second //works better without trying to time it.
+		while(access("Server_dh", F_OK) != 0) {
+			sleep(1);
+		}
+		
+		FILE *Server_dh = fopen("Server_dh", "rb");
+		if(Server_dh == NULL) {
+			error("Cannot read server dh bytes :(");
+			exit(1);
+		} 
 
-		FILE *Server_dh = fopen("Server_dh", "rb"); 
 		size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
 		if(r2 < 0)
 		{
@@ -493,15 +498,6 @@ static int initClientNet(char* hostname, int port)
 			exit(-1);
 		}
 		fclose(Server_dh);
-
-		// printf("Client SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
-		// printf("\nServer SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kC[i]);
-		// }	
 
 		if (memcmp(kA,kC,klen) != 0)
 		{
@@ -531,19 +527,6 @@ static int initClientNet(char* hostname, int port)
 				printf("\n");
 				exit(-1);
 			}
-
-			// printf("\nError: Server did not match client dh\n");
-			// printf("Client SH\n");
-			// 	for (size_t i = 0; i < klen; i++) {
-			// 	printf("%02x ",kA[i]);
-			// }
-			// printf("\nServer SH\n");
-			// for (size_t i = 0; i < klen; i++) {
-			// 	printf("%02x ",kC[i]);
-			// }	
-			// // should_exit = true;
-			// printf("\n");
-			// exit(-1);
 		}
 		memset(kC, 0, sizeof(kC)); //erase information
 
@@ -560,7 +543,6 @@ static int initClientNet(char* hostname, int port)
 	/* at this point, should be able to send/recv on sockfd */
 
 	// connection successful with the client and server
-	// since client goes first, call the init func
 	log("initClientNet: Successfully connected to client");
 
 	return 0;
@@ -638,18 +620,18 @@ static void msg_typed(char *line)
 	{
 		//read from file to get other persons public key 2.
 		FILE *pk2 = fopen("PublicKeyServer", "r");
-		mpz_inp_str(global_user2_pk, pk2, base);
+		mpz_inp_str(global_server_pk, pk2, base);
 		fclose(pk2);
 		gotPK = true;
 		//Get DH
-		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
+		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen);
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kA[i]);
 		// }
 
 		//check if they got correct pk
 		FILE *DH1 = fopen("DH1-PK2", "w");
-		mpz_out_str(DH1, base, global_user2_pk);
+		mpz_out_str(DH1, base, global_server_pk);
 		fclose(DH1);
 		// verified: received correct pk
 	}
@@ -657,41 +639,20 @@ static void msg_typed(char *line)
 	{
 		//read from file to get other persons public key 1.
 		FILE *pk1 = fopen("PublicKeyClient", "r");
-		mpz_inp_str(global_user1_pk, pk1, base);
+		mpz_inp_str(global_client_pk, pk1, base);
 		fclose(pk1);
 		gotPK = true;
-		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kB[i]);
 		// }
 
 		//check if they got correct pk
 		FILE *DH2 = fopen("DH2-PK1", "w");
-		mpz_out_str(DH2, base, global_user1_pk);
+		mpz_out_str(DH2, base, global_client_pk);
 		fclose(DH2); 
 		//verified: received correct pk
 	}
-
-	// if(isclient)
-	// {
-	// 	log("client's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kA[i]);
-	// 		log(text);
-	// 	}
-	// }
-
-	// else
-	// {
-	// 	log("\nserver's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kB[i]);
-	// 		log(text);
-	// 	}
-		
-	// }
 
 	string line_str;
 	if (!line) {
@@ -1022,88 +983,3 @@ void* recvMsg(void*)
 	}
 	return 0;
 }
-
-
-
-//Garbage code
-
-	// /* Alice's key derivation: */
-	// unsigned char kA[klen];
-	// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-	// /* Bob's key derivation: */
-	// unsigned char kB[klen];
-	// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-
-	// printf("Alice's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kA[i]);
-	// 	}
-	// printf("\n");
-	// printf("Bob's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kB[i]);
-	// }
-	/*exact same code, every time. 
-	d0 6b 94 ca bb 8c b0 da 5c 08 c7 2f e2 5a a9 37 61 c6 70 ab 0b ce 75 4b 87 8c d9 89 4e 4f 65 fe e6 b1 c1 aa d5 82 e8 78 ae ed 5a ee ab 9b 60 bb 3b
-	 69 2c 64 99 93 a0 d3 3a 2a d7 2d e7 68 ac fa 33 8a ab 42 fa cf 83 36 8b bd 08 ad d5 29 03 27 18 42 b5 f2 73 0b d9 13 f6 03 14 6e 53 c1 ae 34 3a 
-	 a1 d9 a2 87 cf 2c b0 b4 2b f0 51 23 f1 1f 85 af 70 05 f0 d7 4a 46 d5 7d 45 95 eb a9 2a bc 9a
-	*/
-	// init("params");
-	// if(isclient && !gotPK)
-	// {
-	// 	//read from file to get other persons public key 2.
-	// 	FILE *pk2 = fopen("PublicKeyServer", "r");
-	// 	mpz_inp_str(global_user2_pk, pk2, base);
-	// 	fclose(pk2);
-	// 	gotPK = true;
-	// 	//Get DH
-	// 	dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-	// 	// for (size_t i = 0; i < klen; i++) {
-	// 	// 	printf("%02x ",kA[i]);
-	// 	// }
-
-	// 	//check if they got correct pk
-	// 	FILE *DH1 = fopen("DH1-PK2", "w");
-	// 	mpz_out_str(DH1, base, global_user2_pk);
-	// 	fclose(DH1);
-	// 	// verified: received correct pk
-	// }
-	// else if (!isclient && !gotPK)
-	// {
-	// 	//read from file to get other persons public key 1.
-	// 	FILE *pk1 = fopen("PublicKeyClient", "r");
-	// 	mpz_inp_str(global_user1_pk, pk1, base);
-	// 	fclose(pk1);
-	// 	gotPK = true;
-	// 	dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-	// 	// for (size_t i = 0; i < klen; i++) {
-	// 	// 	printf("%02x ",kB[i]);
-	// 	// }
-
-	// 	//check if they got correct pk
-	// 	FILE *DH2 = fopen("DH2-PK1", "w");
-	// 	mpz_out_str(DH2, base, global_user1_pk);
-	// 	fclose(DH2); 
-	// 	//verified: received correct pk
-	// }
-
-	// if(isclient)
-	// {
-	// 	log("client's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kA[i]);
-	// 		log(text);
-	// 	}
-	// }
-
-	// else
-	// {
-	// 	log("\nserver's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kB[i]);
-	// 		log(text);
-	// 	}
-		
-	// }
