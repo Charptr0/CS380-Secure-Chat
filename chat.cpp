@@ -287,6 +287,7 @@ int initServerNet(int port)
 	// generate Server public key
 	NEWZ(global_server_sk);
 	NEWZ(global_server_pk);
+	NEWZ(global_client_pk);
 	if(dhGen(global_server_sk, global_server_pk) != 0) {
 		log("Something went wrong in dhGen() on the server, did you run the init() function?");
 
@@ -325,6 +326,10 @@ int initServerNet(int port)
 		error("error on accept");
 	else
 	{
+		while(access("PublicKeyClient", F_OK) != 0) {
+			sleep(1);
+		}
+
 		//Get client public key
 		FILE *pk1 = fopen("PublicKeyClient", "r");
 		if(pk1 == NULL) {
@@ -336,6 +341,7 @@ int initServerNet(int port)
 		fclose(pk1);
 
 		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
+
 
 		FILE *Server_dh = fopen("Server_dh", "wb"); //write in binary format
 		size_t r1 = fwrite(kB, sizeof kB[0], klen, Server_dh);
@@ -418,9 +424,11 @@ static int initClientNet(char* hostname, int port)
 		exit(-1);
 	}
 
+
 	// generate Client key
 	NEWZ(global_client_sk);
 	NEWZ(global_client_pk);
+	NEWZ(global_server_pk);
 	if(dhGen(global_client_sk, global_client_pk) != 0) {
 		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
@@ -451,6 +459,10 @@ static int initClientNet(char* hostname, int port)
 		error("ERROR connecting");
 	else
 	{
+		while(access("PublicKeyServer", F_OK) != 0) {
+			sleep(1);
+		}
+
 		//read from file to get Server public key
 		FILE *pk2 = fopen("PublicKeyServer", "r");
 		if(pk2 == NULL) {
@@ -466,6 +478,8 @@ static int initClientNet(char* hostname, int port)
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kA[i]);
 		// }
+
+		logEncryptedMessage(kA, 128);
 
 		//write to file ClientDH in binary format
 		FILE *Client_dh = fopen("Client_dh", "wb"); 
@@ -502,7 +516,12 @@ static int initClientNet(char* hostname, int port)
 		if (memcmp(kA,kC,klen) != 0)
 		{
 			sleep(1);
+
 			//Client is weird
+			while(access("Server_dh", F_OK) != 0) {
+				sleep(1);
+			}
+
 			FILE *Server_dh = fopen("Server_dh", "rb"); 
 			size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
 			if(r2 < 0)
