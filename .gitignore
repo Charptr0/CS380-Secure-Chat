@@ -21,3 +21,5 @@ Server_dh
 DH1-PK2
 DH2-PK1
 
+# scripts
+delete.sh
