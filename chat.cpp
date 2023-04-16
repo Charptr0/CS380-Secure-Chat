@@ -499,15 +499,6 @@ static int initClientNet(char* hostname, int port)
 		logEncryptedMessage(kA, 128);
 
 		//write to file ClientDH in binary format
-		if(access("Client_dh", W_OK) == 0) {
-			int status = remove("Client_dh");
-			if(status != 0) {
-				error("Cannot remove Client_dh file");
-				should_exit = true;
-				exit(-1);
-			}
-		}
-
 		FILE *Client_dh = fopen("Client_dh", "wb"); 
 		size_t r1 = fwrite(kA, sizeof kA[0], klen, Client_dh);
 		if(r1 < 0)
