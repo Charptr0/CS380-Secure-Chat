@@ -147,6 +147,21 @@ void logEncryptedMessage(const char* encryptedMessage) {
 }
 
 /**
+ * Delete Server_dh and Client_dh files due to sync issues
+ * @author Chenhao L.
+*/
+void deleteDHFiles() {
+	if(access("Client_dh", W_OK) == 0) {
+		remove("Client_dh");
+	}
+
+	if(access("Server_dh", W_OK) == 0) {
+		remove("Server_dh");
+	}
+}
+
+
+/**
  * Convert the encrypted bytes into base 64 to transfer across the channel
  * @param bytes - The encrypted bits
  * @param len - the size of the bits
@@ -277,6 +292,8 @@ char* decryptMessage(const char* encodedMessage) {
 // required handshake with the client
 int initServerNet(int port)
 {
+	deleteDHFiles();
+
 	if (init("params") != 0) {
 		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
 		printf("Cannot init Diffie Hellman key exchange :(");
@@ -482,6 +499,15 @@ static int initClientNet(char* hostname, int port)
 		logEncryptedMessage(kA, 128);
 
 		//write to file ClientDH in binary format
+		if(access("Client_dh", W_OK) == 0) {
+			int status = remove("Client_dh");
+			if(status != 0) {
+				error("Cannot remove Client_dh file");
+				should_exit = true;
+				exit(-1);
+			}
+		}
+
 		FILE *Client_dh = fopen("Client_dh", "wb"); 
 		size_t r1 = fwrite(kA, sizeof kA[0], klen, Client_dh);
 		if(r1 < 0)
