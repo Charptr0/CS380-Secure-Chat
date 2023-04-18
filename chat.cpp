@@ -759,10 +759,6 @@ static void msg_typed(char *line)
 		 * have to wait for timeout on recv()? */
 	} else {
 		if (*line) {
-			// NOTE: please update the key params from "1234" to the other user's pk
-			// waiting on that
-			// if the client, then encrypt using the server's kA
-			// if not client, then encrypt using the client's kB
 			char* encrypted_line = encryptMessage(line);
 
 			add_history(encrypted_line);
@@ -1079,40 +1075,23 @@ void* recvMsg(void*)
         if (isclient && gotPK){
 			hmacServer(decryptedMessage);
             
-            printf("\nClient Side\n");
-            for (size_t i = 0; i < 64; i++) {
-                printf("%02x ",clientMac[i]);
-            }
-            printf("\n");
-            for (size_t i = 0; i < 64; i++) {
-                printf("%02x ",serverMac[i]);
-            }
-            printf("\n");
-            /*// Server should already be computed
+            // Server should already be computed
             if (clientMac == serverMac) {
-                // send "authentication sucsess"
+                // send "authentication success"
             } else {
                 // send "authentication failed"
-            }*/
+            }
+
         // Esle we do server when DH is calculated, then we do HMAC
         } else if (!isclient && gotPK){
             hmacClient(decryptedMessage);
 
-            printf("\nServer Side\n");
-            for (size_t i = 0; i < 64; i++) {
-                printf("%02x ",serverMac[i]);
-            }
-            printf("\n");
-            for (size_t i = 0; i < 64; i++) {
-                printf("%02x ",clientMac[i]);
-            }
-            printf("\n");
-            /*// client should already be computed
+            // client should already be computed
             if (clientMac == serverMac) {
-                // send "authentication sucsess"
+                // send "authentication success"
             } else {
                 // send "authentication failed"
-            }*/
+            }
         }
 
 		pthread_mutex_lock(&qmx);
