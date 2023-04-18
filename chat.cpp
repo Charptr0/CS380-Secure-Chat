@@ -704,9 +704,7 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 }
 
 static void msg_typed(char *line)
-{
-	string mymsg;
-  
+{ 
 	if(isclient && !gotPK)
 	{
 		//read from file to get other persons public key 2.
@@ -747,12 +745,10 @@ static void msg_typed(char *line)
 
 	// If client and DH is calculated then we can do HMAC
 	if (isclient && gotPK){
-		const char* mymsginC = mymsg.c_str();
-		hmacClient(mymsginC);
+		hmacClient(line);
 	// Esle we do server when DH is calculated, then we do HMAC
 	} else if (!isclient && gotPK){
-		const char* mymsginC = mymsg.c_str();
-		hmacServer(mymsginC);
+		hmacServer(line);
 	}
 
 	string line_str;
@@ -995,7 +991,7 @@ int main(int argc, char *argv[])
 				pthread_mutex_unlock(&qmx);
 				break;
 				// Ctrl-L -- redraw screen
-			// case '\f':
+			// case '\f':m
 			// 	// Makes the next refresh repaint the screen from scratch
 			// 	/* XXX this needs to be done in the curses thread as well. */
 			// 	clearok(curscr,true);
@@ -1078,26 +1074,46 @@ void* recvMsg(void*)
 		// decrypt the message here
 		char* decryptedMessage = decryptMessage(msg);
 
-		// HMAC
-		//	If client and DH is calculated then we can do HMAC
-		if (isclient && gotPK){
-			hmacClient(decryptedMessage);
-			// Server should already be computed
-			if (clientMac == serverMac) {
-				// send "authentication sucsess"
-			} else {
-				// send "authentication failed"
-			}
-		// Esle we do server when DH is calculated, then we do HMAC
-		} else if (!isclient && gotPK){
+        // HMAC
+        //    If client and DH is calculated then we can do HMAC
+        if (isclient && gotPK){
 			hmacServer(decryptedMessage);
-			// client should already be computed
-			if (clientMac == serverMac) {
-				// send "authentication sucsess"
-			} else {
-				// send "authentication failed"
-			}
-		}
+            
+            printf("\nClient Side\n");
+            for (size_t i = 0; i < 64; i++) {
+                printf("%02x ",clientMac[i]);
+            }
+            printf("\n");
+            for (size_t i = 0; i < 64; i++) {
+                printf("%02x ",serverMac[i]);
+            }
+            printf("\n");
+            /*// Server should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication sucsess"
+            } else {
+                // send "authentication failed"
+            }*/
+        // Esle we do server when DH is calculated, then we do HMAC
+        } else if (!isclient && gotPK){
+            hmacClient(decryptedMessage);
+
+            printf("\nServer Side\n");
+            for (size_t i = 0; i < 64; i++) {
+                printf("%02x ",serverMac[i]);
+            }
+            printf("\n");
+            for (size_t i = 0; i < 64; i++) {
+                printf("%02x ",clientMac[i]);
+            }
+            printf("\n");
+            /*// client should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication sucsess"
+            } else {
+                // send "authentication failed"
+            }*/
+        }
 
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,decryptedMessage,"Mr Thread",msg_win});
