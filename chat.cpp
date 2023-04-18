@@ -25,6 +25,7 @@ using std::deque;
 #include <utility>
 using std::pair;
 #include "dh.h"
+#include <cstring>
 
 static pthread_t trecv;     /* wait for incoming messagess and post to queue */
 void* recvMsg(void*);       /* for trecv */
@@ -82,6 +83,10 @@ bool gotPK = false;
 bool varification = false;
 unsigned char kA[klen]; //client dhfinal
 unsigned char kB[klen]; //server dhfinal
+
+// HMAC globals
+unsigned char clientMac[64]; // global variable to store computed HMAC
+unsigned char serverMac[64]; // global variable to store computed HMAC
 
 /**
  * Write a log message to a text file
@@ -287,6 +292,56 @@ char* decryptMessage(const char* encodedMessage) {
 {
 	perror(msg);
 	fail_exit("");
+}
+
+// HMAC helpers
+// This is for computing HMAC for client
+void hmacClient(const char* message)
+{	
+    // convert mpz_t to char
+    // get the size of the buffer needed to hold the string
+    size_t size = mpz_sizeinbase(global_client_sk, 10) + 2;  // +2 for sign and null terminator
+    // allocate a buffer to hold the string representation
+    char* buffer = new char[size];
+    // convert global_client_sk to a string
+    mpz_get_str(buffer, 10, global_client_sk);
+    // create a std::string from the buffer
+    std::string stringClientKey(buffer);
+    // free the buffer
+    delete[] buffer;
+    
+    // HMAC
+    const char* hmackey = stringClientKey.c_str();
+    unsigned char mac[64]; /* if using sha512 */
+    memset(mac, 0, sizeof(mac));
+    HMAC(EVP_sha512(), hmackey, strlen(hmackey), (unsigned char*)message, strlen(message), mac, 0);
+
+	// store HMAC
+    memcpy(clientMac, mac, sizeof(mac));
+}
+//This is to compute HMAC for server
+void hmacServer(const char* message)
+{
+    // convert mpz_t to char
+    // get the size of the buffer needed to hold the string
+    size_t size = mpz_sizeinbase(global_server_sk, 10) + 2;  // +2 for sign and null terminator
+    // allocate a buffer to hold the string representation
+    char* buffer = new char[size];
+    // convert global_client_sk to a string
+    mpz_get_str(buffer, 10, global_server_sk);
+    // create a std::string from the buffer
+    std::string stringServerKey(buffer);
+    // free the buffer
+    delete[] buffer;
+    
+    // HMAC
+    const char* hmackey = stringServerKey.c_str();
+    unsigned char mac[64]; /* if using sha512 */
+    memset(mac, 0, sizeof(mac));
+    HMAC(EVP_sha512(), hmackey, strlen(hmackey), (unsigned char*)message, strlen(message), mac,0);
+
+	// store HMAC
+    memcpy(serverMac, mac, sizeof(mac));
 }
 
 // required handshake with the client
@@ -649,9 +704,7 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 }
 
 static void msg_typed(char *line)
-{
-	string mymsg;
-  
+{ 
 	if(isclient && !gotPK)
 	{
 		//read from file to get other persons public key 2.
@@ -690,6 +743,14 @@ static void msg_typed(char *line)
 		//verified: received correct pk
 	}
 
+	// If client and DH is calculated then we can do HMAC
+	if (isclient && gotPK){
+		hmacClient(line);
+	// Esle we do server when DH is calculated, then we do HMAC
+	} else if (!isclient && gotPK){
+		hmacServer(line);
+	}
+
 	string line_str;
 	if (!line) {
 		// Ctrl-D pressed on empty line
@@ -698,10 +759,6 @@ static void msg_typed(char *line)
 		 * have to wait for timeout on recv()? */
 	} else {
 		if (*line) {
-			// NOTE: please update the key params from "1234" to the other user's pk
-			// waiting on that
-			// if the client, then encrypt using the server's kA
-			// if not client, then encrypt using the client's kB
 			char* encrypted_line = encryptMessage(line);
 
 			add_history(encrypted_line);
@@ -930,7 +987,7 @@ int main(int argc, char *argv[])
 				pthread_mutex_unlock(&qmx);
 				break;
 				// Ctrl-L -- redraw screen
-			// case '\f':
+			// case '\f':m
 			// 	// Makes the next refresh repaint the screen from scratch
 			// 	/* XXX this needs to be done in the curses thread as well. */
 			// 	clearok(curscr,true);
@@ -1012,10 +1069,36 @@ void* recvMsg(void*)
 
 		// decrypt the message here
 		char* decryptedMessage = decryptMessage(msg);
+
+        // HMAC
+        //    If client and DH is calculated then we can do HMAC
+        if (isclient && gotPK){
+			hmacServer(decryptedMessage);
+            
+            // Server should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication success"
+            } else {
+                // send "authentication failed"
+            }
+
+        // Esle we do server when DH is calculated, then we do HMAC
+        } else if (!isclient && gotPK){
+            hmacClient(decryptedMessage);
+
+            // client should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication success"
+            } else {
+                // send "authentication failed"
+            }
+        }
+
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,decryptedMessage,"Mr Thread",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}
+	
 	return 0;
 }
