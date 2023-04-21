@@ -55,10 +55,10 @@ int listensock, sockfd;
 static bool should_exit = false;
 
 // global variables for pks and sks
-mpz_t global_user1_pk;
-mpz_t global_user1_sk;
-mpz_t global_user2_pk;
-mpz_t global_user2_sk;
+mpz_t global_client_pk;
+mpz_t global_client_sk;
+mpz_t global_server_pk;
+mpz_t global_server_sk;
 
 const size_t klen = 128;
 int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
@@ -123,9 +123,9 @@ int initServerNet(int port)
 	}
 
 	// generate Server public key
-	NEWZ(global_user2_sk);
-	NEWZ(global_user2_pk);
-	if(dhGen(global_user2_sk, global_user2_pk) != 0) {
+	NEWZ(global_server_sk);
+	NEWZ(global_server_pk);
+	if(dhGen(global_server_sk, global_server_pk) != 0) {
 		log("Something went wrong in dhGen() on the server, did you run the init() function?");
 
 		// instead of shutting down the program when keys cannot be generated, in the future
@@ -136,10 +136,6 @@ int initServerNet(int port)
 		should_exit = true;
 		exit(-1);
 	}
-	//store Server public key (g^a mod p) to file "PublicKeyServer". 
-	FILE *pk2 = fopen("PublicKeyServer", "w");
-	mpz_out_str(pk2, base, global_user2_pk);
-	fclose(pk2);
 
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -163,70 +159,90 @@ int initServerNet(int port)
 		error("error on accept");
 	else
 	{
-		// //wait for client to write their dhF
-		// usleep(2000000);//sleeps for 2 second
-		
-		//Get client public key
-		FILE *pk1 = fopen("PublicKeyClient", "r");
-		mpz_inp_str(global_user1_pk, pk1, base);
-		fclose(pk1);
-		
-		//check if they got correct pk by printing in different file
-		// FILE *DH2 = fopen("DH2-PK1", "w");
-		// mpz_out_str(DH2, base, global_user1_pk);
-		// fclose(DH2); 
+		// size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base);
+		// unsigned long a[SERVER_SIZE];
+		// BYTES2Z(global_server_pk, a, SERVER_SIZE);
+		// size_t a_size = sizeof(a);
+		// printf("SIZE OF A: %ld\nSERVER_SIZE: %d\n", sizeof(a), SERVER_SIZE); // >5000
 
-		dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+		// if(send(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0) //doesnt work with SERVER_SIZE either
+		// 	perror("send");
+		// if(send(sockfd, a, a_size, 0) < 0)
+		// 	perror("send");
 
-		FILE *Server_dh = fopen("Server_dh", "wb"); //write in binary format
-		size_t r1 = fwrite(kB, sizeof kB[0], klen, Server_dh);
-		if(r1 < 0)
+		// printf("%llu\n", a);
+
+
+		//CALCULATE SIZE
+		size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base);
+		//SENDING SIZE OF SERVER PK
+		if(send(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
+			perror("send");
+
+		char server_pk[SERVER_SIZE];
+		mpz_get_str(server_pk, base, global_server_pk); //convert to string
+
+		if(send(sockfd, server_pk, SERVER_SIZE, 0) < 0) //send server_pk
 		{
-			perror("fwrite");
+			// perror("send");
+			printf("Error sending server_pk: [%s]\n", strerror(errno));
 			exit(-1);
 		}
-		fclose(Server_dh);
-
-		unsigned char kC[klen];
-
-		FILE *Client_dh = fopen("Client_dh", "rb"); 
-		size_t r2 = fread(kC, sizeof kC[0], klen, Client_dh);
-		if(r2 < 0)
+		else
 		{
-			perror("fwrite");
-			exit(-1);
-		}		
-		fclose(Client_dh);
+			printf("Sent server_pk successful\n");
+			printf("SERVER SIZE: %d\n", SERVER_SIZE);
+			printf("%s\n", server_pk);
+		}
 
-		// printf("\nServer SH\n");
+
+		// //RECEIVING CLIENT PK
+		// int CLIENT_SIZE;
+		// int CLIENT_SIZE_ID;
+		// recv(sockfd, &CLIENT_SIZE_ID, 10, 0);
+		// printf("CLIENT Size: %d\n", CLIENT_SIZE);
+		// char client_pk[CLIENT_SIZE];
+		// if(recv(sockfd, client_pk, CLIENT_SIZE, 0) < 0) //recv client_pk
+		// {
+		// 	printf("Error receiving client_pk: [%s]\n", strerror(errno));
+		// 	exit(-1);
+		// }
+		// else
+		// {
+		// 	printf("Received client_pk successful\n");
+		// 	mpz_set_str(global_client_pk, client_pk, base);
+		// 	printf("%s\n", client_pk);
+		// }
+
+		// dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen); //create dhfinal
+
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kB[i]);
 		// }
-		// printf("\nClient SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kC[i]);
+
+		// if(send(sockfd, kB, sizeof(kB), 0) < 0) //send server_dhf
+		// {
+		// 	printf("Error sending server_dhf: [%s]\n", strerror(errno));
+		// 	exit(-1);
+		// }
+		// else
+		// 	printf("Sent server_dhf successful\n");
+
+		// if(recv(sockfd, kA, sizeof(kA), 0) < 0) //recv client_dhf
+		// {
+		// 	printf("Error receiving client_dhf: [%s]\n", strerror(errno));
+		// 	exit(-1);
+		// }
+		// else
+		// 	printf("Received client_dhf successful\n");
+
+		// if (memcmp(kB,kA,klen) != 0)
+		// {
+		// 	printf("No match\n");
+		// 	exit(-1);
 		// }
 
-		if (memcmp(kB,kC,klen) != 0)
-		{
-			printf("\nError: Client did not match server dh\n");
-			printf("\nServer SH\n");
-			for (size_t i = 0; i < klen; i++) {
-				printf("%02x ",kB[i]);
-			}
-			printf("\nClient SH\n");
-			for (size_t i = 0; i < klen; i++) {
-				printf("%02x ",kC[i]);
-			}
-			// should_exit = true;
-			printf("\n");
-			exit(-1);
-		}
-
-		memset(kC, 0, sizeof(kC)); //erase information
-
-		// //wait for client to write their dhF
-		// usleep(1000000);//sleeps for 2 second
+		// memset(kA, 0, sizeof(kA));
 	}
 	close(listensock);
 
@@ -249,19 +265,14 @@ static int initClientNet(char* hostname, int port)
 	}
 
 	// generate Client key
-	NEWZ(global_user1_sk);
-	NEWZ(global_user1_pk);
-	if(dhGen(global_user1_sk, global_user1_pk) != 0) {
+	NEWZ(global_client_sk);
+	NEWZ(global_client_pk);
+	if(dhGen(global_client_sk, global_client_pk) != 0) {
 		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
 		// should_exit = true;
 		exit(-1);
 	}
-
-	//store Client public key (g^b mod p) to file "PublicKeyClient". 
-	FILE *pk1 = fopen("PublicKeyClient", "w");
-	mpz_out_str(pk1, base, global_user1_pk);
-	fclose(pk1);
 
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -281,98 +292,89 @@ static int initClientNet(char* hostname, int port)
 		error("ERROR connecting");
 	else
 	{
-		//read from file to get Server public key
-		FILE *pk2 = fopen("PublicKeyServer", "r");
-		mpz_inp_str(global_user2_pk, pk2, base);
-		fclose(pk2);
+		// size_t SERVER_SIZE;
+		// if(recv(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
+		// 	perror("recv");
 
-		//check if they got correct pk by printing in different file
-		// FILE *DH1 = fopen("DH1-PK2", "w");
-		// mpz_out_str(DH1, base, global_user2_pk);
-		// fclose(DH1);
+		// unsigned long a[SERVER_SIZE];
 
-		//Get DH
-		dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
+		// if(recv(sockfd, a, SERVER_SIZE, 0) < 0)
+		// 	perror("recv");
+		// printf("SIZE Of A: %d\nSERVER_SIZE: %ld\n",sizeof(a), SERVER_SIZE); //data coming in does not match
+		// printf("%llu\n", a);
+		// Z2BYTES(a,SERVER_SIZE,global_server_pk);
 
-		//write to file ClientDH in binary format
-		FILE *Client_dh = fopen("Client_dh", "wb"); 
-		size_t r1 = fwrite(kA, sizeof kA[0], klen, Client_dh);
-		if(r1 < 0)
-		{
-			perror("fwrite");
+
+		//RECEIVE SIZE OF SERVER PK
+		size_t SERVER_SIZE;
+		if(recv(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
+			perror("recv");
+		printf("SERVER Size: %d\n", SERVER_SIZE);
+		
+		// Receiving SERVER PK
+		char server_pk[SERVER_SIZE];
+		if(recv(sockfd, server_pk, SERVER_SIZE, 0) < 0) //recv server_pk
+		{	
+			printf("Error receiving server_pk: [%s]\n", strerror(errno));
 			exit(-1);
 		}
-		fclose(Client_dh);
-
-		unsigned char kC[klen];
-
-		// //wait for server to finish comparison
-		// usleep(2000000);//sleeps for 2 second //works better without trying to time it.
-
-		FILE *Server_dh = fopen("Server_dh", "rb"); 
-		size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
-		if(r2 < 0)
+		else
 		{
-			perror("fwrite");
-			exit(-1);
+			printf("Received server_pk successful\n");
+			printf("%s\n", server_pk);
+			mpz_set_str(global_server_pk, server_pk, base);
 		}
-		fclose(Server_dh);
 
-		// printf("Client SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
-		// printf("\nServer SH\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kC[i]);
+		// //Sending CLIENT PK
+		// int CLIENT_SIZE = mpz_sizeinbase(global_client_pk, base);
+		// int CLIENT_SIZE_ID = htonl(CLIENT_SIZE);
+		// send(sockfd, (const char*)CLIENT_SIZE_ID, 10, 0);
+
+		// char client_pk[CLIENT_SIZE];
+		// mpz_get_str(client_pk, base, global_client_pk); //convert to string
+
+		// if(send(sockfd, client_pk, CLIENT_SIZE, 0) < 0) //send client_pk
+		// {
+		// 	printf("Error sending client_pk: [%s]\n", strerror(errno));
+		// 	exit(-1);
 		// }	
+		// else
+		// {
+		// 	printf("Sent client_pk successful\n");
+		// 	printf("%s\n", client_pk);
+		// }
 
-		if (memcmp(kA,kC,klen) != 0)
-		{
-			sleep(1);
-			//Client is weird
-			FILE *Server_dh = fopen("Server_dh", "rb"); 
-			size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
-			if(r2 < 0)
-			{
-				perror("fwrite");
-				exit(-1);
-			}
-			fclose(Server_dh);
-			
-			if (memcmp(kA,kC,klen) != 0)
-			{
-				printf("\nError: Server did not match client dh\n");
-				printf("Client SH\n");
-					for (size_t i = 0; i < klen; i++) {
-					printf("%02x ",kA[i]);
-				}
-				printf("\nServer SH\n");
-				for (size_t i = 0; i < klen; i++) {
-					printf("%02x ",kC[i]);
-				}	
-				// should_exit = true;
-				printf("\n");
-				exit(-1);
-			}
+		// //Generate DHFINAL
+		// dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen); //create dhfinal
 
-			// printf("\nError: Server did not match client dh\n");
-			// printf("Client SH\n");
-			// 	for (size_t i = 0; i < klen; i++) {
-			// 	printf("%02x ",kA[i]);
-			// }
-			// printf("\nServer SH\n");
-			// for (size_t i = 0; i < klen; i++) {
-			// 	printf("%02x ",kC[i]);
-			// }	
-			// // should_exit = true;
-			// printf("\n");
-			// exit(-1);
-		}
-		memset(kC, 0, sizeof(kC)); //erase information
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+
+		// if(recv(sockfd, kB, sizeof(kB), 0) < 0) //recv server_dhf
+		// {
+		// 	printf("Error receiving server_dhf: [%s]\n", strerror(errno));
+		// 	exit(-1);
+		// }
+		// else
+		// 	printf("Received server_dhf successful\n");
+
+		// if(send(sockfd, kA, sizeof(kA), 0) < 0) //send client_dhf
+		// {
+		// 	printf("Error sending client_dhf: [%s]\n", strerror(errno));
+		// 	// perror("send");
+		// 	exit(-1);
+		// }
+		// else
+		// 	printf("Sent client_dhf successful\n");
+
+		// if (memcmp(kA,kB,klen) != 0)
+		// {
+		// 	printf("No match\n");
+		// 	exit(-1);
+		// }
+
+		// memset(kB, 0, sizeof(kB));
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
