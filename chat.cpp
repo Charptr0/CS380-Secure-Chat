@@ -11,6 +11,10 @@
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/bio.h> // encode to base64
+#include <openssl/buffer.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <string.h>
 #include <getopt.h>
 #include <string>
@@ -21,6 +25,7 @@ using std::deque;
 #include <utility>
 using std::pair;
 #include "dh.h"
+#include <cstring>
 
 static pthread_t trecv;     /* wait for incoming messagess and post to queue */
 void* recvMsg(void*);       /* for trecv */
@@ -60,6 +65,17 @@ mpz_t global_client_sk;
 mpz_t global_server_pk;
 mpz_t global_server_sk;
 
+// global rsa keys
+RSA* server_rsa_keys;
+RSA* client_rsa_keys;
+
+int global_encryptedMessageLen = 256;
+int global_encodedMessageLen = 256;
+
+// file paths
+const char* CLIENT_PUBLIC_RSA_KEY_PATH = "clientPublicRSAKey.pem";
+const char* SERVER_PUBLIC_RSA_KEY_PATH = "serverPublicRSAKey.pem";
+
 const size_t klen = 128;
 int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
 bool isclient; //turned global for convienence
@@ -67,6 +83,10 @@ bool gotPK = false;
 bool varification = false;
 unsigned char kA[klen]; //client dhfinal
 unsigned char kB[klen]; //server dhfinal
+
+// HMAC globals
+unsigned char clientMac[64]; // global variable to store computed HMAC
+unsigned char serverMac[64]; // global variable to store computed HMAC
 
 /**
  * Write a log message to a text file
@@ -104,6 +124,168 @@ int log(const char* message, const char* filename = "log.txt") {
     return 0;
 }
 
+/**
+ * Log the encrypted message in bytes to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(unsigned char* encryptedMessage, size_t len) {
+	log("Logging the encrypted message in bytes...");
+	
+	for(size_t i = 0; i < len; i++) {
+		char* text = (char*)malloc(3 * sizeof(char));
+		sprintf(text, "%02x", encryptedMessage[i]);
+		log(text);
+		free(text);
+	}
+
+	log("Finished logging the encrypted message in bytes");
+}
+
+/**
+ * Log the encrypted message encoded in base64 to log.txt
+ * @author Chenhao L.
+*/
+void logEncryptedMessage(const char* encryptedMessage) {
+	log("Logging the encrypted message in base 64");
+	log(encryptedMessage);
+	log("Finished logging the encrypted message in base 64");
+}
+
+/**
+ * Delete Server_dh and Client_dh files due to sync issues
+ * @author Chenhao L.
+*/
+void deleteDHFiles() {
+	if(access("Client_dh", W_OK) == 0) {
+		remove("Client_dh");
+	}
+
+	if(access("Server_dh", W_OK) == 0) {
+		remove("Server_dh");
+	}
+}
+
+
+/**
+ * Convert the encrypted bytes into base 64 to transfer across the channel
+ * @param bytes - The encrypted bits
+ * @param len - the size of the bits
+ * @return the encrypted message encoded in base64 
+ * @author Chenhao L.
+*/
+char* convertBytesToBase64(unsigned char* bytes, size_t len) {
+	// encode the string into base64
+	BIO* bio = BIO_new(BIO_s_mem());
+	BIO* base64 = BIO_new(BIO_f_base64());
+
+	// i dont understand any of this but it works
+	BIO_push(base64, bio);
+	BIO_write(base64, bytes, len);
+	BIO_flush(base64);
+
+	BUF_MEM* mem = NULL;
+	BIO_get_mem_ptr(bio, &mem);
+	char* base64EncodedMessage = (char*)malloc(mem->length + 1);
+	memcpy(base64EncodedMessage, mem->data, mem->length);
+	base64EncodedMessage[mem->length] = '\0';
+	BIO_free_all(base64);
+
+	return base64EncodedMessage;
+}
+
+/**
+ * Convert the base64 encoded message back into encrypted bytes
+ * @param encodedMessage - the base64 encoded message
+ * @return the encrypted message in bytes
+ * @author Chenhao L.
+*/
+unsigned char* convertBase64ToBytes(const char* encodedMessage) {
+	size_t encodedMessage_len = strlen(encodedMessage);
+
+	// decode the encoded b64 string back into bytes
+	BIO* bio = BIO_new_mem_buf(encodedMessage, encodedMessage_len);
+	BIO* base64 = BIO_new(BIO_f_base64());
+	BIO_push(base64, bio);
+
+	unsigned char* encodedMessageInBytes = (unsigned char*)malloc(global_encryptedMessageLen * sizeof(char));
+	BIO_read(base64, encodedMessageInBytes, encodedMessage_len);
+	BIO_free_all(base64);
+
+	return encodedMessageInBytes;
+}
+
+/**
+ * Generate a RSA using the boiler plate code provide in openssl-examples
+ * @return a new RSA key
+*/
+RSA* generateRSAKeys() {
+	RSA* keys = RSA_new();
+	if (!keys) exit(1);
+	BIGNUM* e = BN_new();
+	if (!e) exit(1);
+	BN_set_word(e,RSA_F4); /* e = 65537  */
+	/* NOTE: if you have an old enough openssl library, you might
+	 * have to setup the random number generator before this call: */
+	int r = RSA_generate_key_ex(keys,2048,e,NULL);
+	if (r != 1) exit(1);
+
+	return keys;
+}
+
+/**
+ * Encrypt the incoming message with RSA encryption
+ * @param message - the message to encrypt
+ * @return the message encrypted using RSA and encoded in base64
+ * @author Chenhao L.
+*/
+char* encryptMessage(const char* message) {
+
+	const char* otherUserPublicKeyPath = isclient ? SERVER_PUBLIC_RSA_KEY_PATH : CLIENT_PUBLIC_RSA_KEY_PATH;
+
+	// read pk
+	FILE* fs = fopen(otherUserPublicKeyPath, "r");
+	if(fs == NULL) exit(1);
+
+	RSA* otherUserRSAPublicKey = PEM_read_RSA_PUBKEY(fs, NULL, NULL, NULL);
+
+	// encrypt using the other user's pk
+	size_t len = strlen(message);
+	unsigned char* encryptedMessage = (unsigned char*)malloc(RSA_size(otherUserRSAPublicKey));
+	int encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, otherUserRSAPublicKey, RSA_PKCS1_OAEP_PADDING);
+	if (encryptedMessageLen == -1) exit(1);
+
+	fclose(fs);
+
+	global_encryptedMessageLen = encryptedMessageLen;
+
+	// encode into base64
+	return convertBytesToBase64(encryptedMessage, encryptedMessageLen);
+}
+
+/**
+ * Decrypt the incoming message
+ * @param encodedMessage - the incoming message from the other user
+ * @return the decrypted message in plain text
+ * @author Chenhao L.
+*/
+char* decryptMessage(const char* encodedMessage) {
+	// decrypt the base64 encoded msg
+	unsigned char* encryptedMessageInBytes = convertBase64ToBytes(encodedMessage);
+
+	// decrypt the encrytion by using the user's private key
+	RSA* keys = isclient ? client_rsa_keys : server_rsa_keys;
+
+	char* pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
+	size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,keys, RSA_PKCS1_OAEP_PADDING);
+
+	if(ptlen == -1) {
+		should_exit = true;
+		exit(1);
+	}
+
+	return pt;
+}
+
 [[noreturn]] static void fail_exit(const char *msg);
 
 [[noreturn]] static void error(const char *msg)
@@ -112,9 +294,61 @@ int log(const char* message, const char* filename = "log.txt") {
 	fail_exit("");
 }
 
+// HMAC helpers
+// This is for computing HMAC for client
+void hmacClient(const char* message)
+{	
+    // convert mpz_t to char
+    // get the size of the buffer needed to hold the string
+    size_t size = mpz_sizeinbase(global_client_sk, 10) + 2;  // +2 for sign and null terminator
+    // allocate a buffer to hold the string representation
+    char* buffer = new char[size];
+    // convert global_client_sk to a string
+    mpz_get_str(buffer, 10, global_client_sk);
+    // create a std::string from the buffer
+    std::string stringClientKey(buffer);
+    // free the buffer
+    delete[] buffer;
+    
+    // HMAC
+    const char* hmackey = stringClientKey.c_str();
+    unsigned char mac[64]; /* if using sha512 */
+    memset(mac, 0, sizeof(mac));
+    HMAC(EVP_sha512(), hmackey, strlen(hmackey), (unsigned char*)message, strlen(message), mac, 0);
+
+	// store HMAC
+    memcpy(clientMac, mac, sizeof(mac));
+}
+//This is to compute HMAC for server
+void hmacServer(const char* message)
+{
+    // convert mpz_t to char
+    // get the size of the buffer needed to hold the string
+    size_t size = mpz_sizeinbase(global_server_sk, 10) + 2;  // +2 for sign and null terminator
+    // allocate a buffer to hold the string representation
+    char* buffer = new char[size];
+    // convert global_client_sk to a string
+    mpz_get_str(buffer, 10, global_server_sk);
+    // create a std::string from the buffer
+    std::string stringServerKey(buffer);
+    // free the buffer
+    delete[] buffer;
+    
+    // HMAC
+    const char* hmackey = stringServerKey.c_str();
+    unsigned char mac[64]; /* if using sha512 */
+    memset(mac, 0, sizeof(mac));
+    HMAC(EVP_sha512(), hmackey, strlen(hmackey), (unsigned char*)message, strlen(message), mac,0);
+
+	// store HMAC
+    memcpy(serverMac, mac, sizeof(mac));
+}
+
 // required handshake with the client
 int initServerNet(int port)
 {
+	deleteDHFiles();
+
 	if (init("params") != 0) {
 		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
 		printf("Cannot init Diffie Hellman key exchange :(");
@@ -125,6 +359,7 @@ int initServerNet(int port)
 	// generate Server public key
 	NEWZ(global_server_sk);
 	NEWZ(global_server_pk);
+	NEWZ(global_client_pk);
 	if(dhGen(global_server_sk, global_server_pk) != 0) {
 		log("Something went wrong in dhGen() on the server, did you run the init() function?");
 
@@ -136,6 +371,10 @@ int initServerNet(int port)
 		should_exit = true;
 		exit(-1);
 	}
+	//store Server public key (g^a mod p) to file "PublicKeyServer". 
+	FILE *pk2 = fopen("PublicKeyServer", "w");
+	mpz_out_str(pk2, base, global_server_pk);
+	fclose(pk2);
 
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -240,9 +479,19 @@ int initServerNet(int port)
 		// {
 		// 	printf("No match\n");
 		// 	exit(-1);
-		// }
+		// }		
 
-		// memset(kA, 0, sizeof(kA));
+
+
+		// generate RSA key for the server
+		server_rsa_keys = generateRSAKeys();
+
+		// write the public key to file
+		FILE* serverPublicRSAKeyFs = fopen(SERVER_PUBLIC_RSA_KEY_PATH, "w");
+		if(serverPublicRSAKeyFs == NULL) exit(1);
+		PEM_write_RSA_PUBKEY(serverPublicRSAKeyFs, server_rsa_keys);
+		fclose(serverPublicRSAKeyFs);
+		
 	}
 	close(listensock);
 
@@ -264,15 +513,22 @@ static int initClientNet(char* hostname, int port)
 		exit(-1);
 	}
 
+
 	// generate Client key
 	NEWZ(global_client_sk);
 	NEWZ(global_client_pk);
+	NEWZ(global_server_pk);
 	if(dhGen(global_client_sk, global_client_pk) != 0) {
 		log("Something went wrong in dhGen() on the client, did you run init() function?");
 
 		// should_exit = true;
 		exit(-1);
 	}
+
+	//store Client public key (g^b mod p) to file "PublicKeyClient". 
+	FILE *pk1 = fopen("PublicKeyClient", "w");
+	mpz_out_str(pk1, base, global_client_pk);
+	fclose(pk1);
 
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -375,12 +631,23 @@ static int initClientNet(char* hostname, int port)
 		// }
 
 		// memset(kB, 0, sizeof(kB));
+
+		
+
+		// generate RSA key for the client
+		client_rsa_keys = generateRSAKeys();
+
+		// write the public key to file
+		FILE* clientPublicRSAKeyFs = fopen(CLIENT_PUBLIC_RSA_KEY_PATH, "w");
+		if(clientPublicRSAKeyFs == NULL) exit(1);
+		PEM_write_RSA_PUBKEY(clientPublicRSAKeyFs, client_rsa_keys);
+		fclose(clientPublicRSAKeyFs);
+
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
 	// connection successful with the client and server
-	// since client goes first, call the init func
-	log("initClientNet Line 154: Successfully connected to client");
+	log("initClientNet: Successfully connected to client");
 
 	return 0;
 }
@@ -450,8 +717,54 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 }
 
 static void msg_typed(char *line)
-{
-	string mymsg;
+{ 
+	if(isclient && !gotPK)
+	{
+		//read from file to get other persons public key 2.
+		FILE *pk2 = fopen("PublicKeyServer", "r");
+		mpz_inp_str(global_server_pk, pk2, base);
+		fclose(pk2);
+		gotPK = true;
+		//Get DH
+		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kA[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH1 = fopen("DH1-PK2", "w");
+		mpz_out_str(DH1, base, global_server_pk);
+		fclose(DH1);
+		// verified: received correct pk
+	}
+	else if (!isclient && !gotPK)
+	{
+		//read from file to get other persons public key 1.
+		FILE *pk1 = fopen("PublicKeyClient", "r");
+		mpz_inp_str(global_client_pk, pk1, base);
+		fclose(pk1);
+		gotPK = true;
+		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
+		// for (size_t i = 0; i < klen; i++) {
+		// 	printf("%02x ",kB[i]);
+		// }
+
+		//check if they got correct pk
+		FILE *DH2 = fopen("DH2-PK1", "w");
+		mpz_out_str(DH2, base, global_client_pk);
+		fclose(DH2); 
+		//verified: received correct pk
+	}
+
+	// If client and DH is calculated then we can do HMAC
+	if (isclient && gotPK){
+		hmacClient(line);
+	// Esle we do server when DH is calculated, then we do HMAC
+	} else if (!isclient && gotPK){
+		hmacServer(line);
+	}
+
+	string line_str;
 	if (!line) {
 		// Ctrl-D pressed on empty line
 		should_exit = true;
@@ -459,30 +772,21 @@ static void msg_typed(char *line)
 		 * have to wait for timeout on recv()? */
 	} else {
 		if (*line) {
-			add_history(line);
-			mymsg = string(line);
-			transcript.push_back("me: " + mymsg);
-			// const size_t klen = 128;
-			/* Alice's key derivation: */
-			// unsigned char kA[klen];
-			// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-			/* Bob's key derivation: */
-			// unsigned char kB[klen];
-			// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
+			char* encrypted_line = encryptMessage(line);
 
-			/* make sure they are the same: */
-			// if (memcmp(kA,kB,klen) == 0) {
-			// 	log("Alice and Bob have the same key :D\n");
-			// } else {
-			// 	log("T.T\n");
-			// }
+			add_history(encrypted_line);
+
+			global_encodedMessageLen = strlen(encrypted_line);
+			line_str = string(line);
+			
+			transcript.push_back("me: " + line_str);
 
 			ssize_t nbytes;
-			if ((nbytes = send(sockfd,line,mymsg.length(),0)) == -1)
+			if ((nbytes = send(sockfd,encrypted_line, global_encodedMessageLen,0)) == -1)
 				error("send failed");
 		}
 		pthread_mutex_lock(&qmx);
-		mq.push_back({false,mymsg,"me",msg_win});
+		mq.push_back({false,line_str,"me",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}
@@ -696,7 +1000,7 @@ int main(int argc, char *argv[])
 				pthread_mutex_unlock(&qmx);
 				break;
 				// Ctrl-L -- redraw screen
-			// case '\f':
+			// case '\f':m
 			// 	// Makes the next refresh repaint the screen from scratch
 			// 	/* XXX this needs to be done in the curses thread as well. */
 			// 	clearok(curscr,true);
@@ -760,107 +1064,54 @@ void* cursesthread(void* pData)
 
 void* recvMsg(void*)
 {
-	size_t maxlen = 256;
-	char msg[maxlen+1];
+	// since we need to get the encoded message, the original 256 bit was too small
+	// hopefully 1024 is big enough :/ - Chenhao L.
+	const int BUFFER_SIZE = 1024;
+
+	char* msg = (char*)malloc(BUFFER_SIZE * sizeof(char));
 	ssize_t nbytes;
 	while (1) {
-		if ((nbytes = recv(sockfd,msg,maxlen,0)) == -1)
+		if ((nbytes = recv(sockfd,msg,BUFFER_SIZE,0)) == -1)
 			error("recv failed");
 		msg[nbytes] = 0; /* make sure it is null-terminated */
 		if (nbytes == 0) {
 			/* signal to the main loop that we should quit: */
 			should_exit = true;
 			return 0;
-		}
+		} 
+
+		// decrypt the message here
+		char* decryptedMessage = decryptMessage(msg);
+
+        // HMAC
+        //    If client and DH is calculated then we can do HMAC
+        if (isclient && gotPK){
+			hmacServer(decryptedMessage);
+            
+            // Server should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication success"
+            } else {
+                // send "authentication failed"
+            }
+
+        // Esle we do server when DH is calculated, then we do HMAC
+        } else if (!isclient && gotPK){
+            hmacClient(decryptedMessage);
+
+            // client should already be computed
+            if (clientMac == serverMac) {
+                // send "authentication success"
+            } else {
+                // send "authentication failed"
+            }
+        }
+
 		pthread_mutex_lock(&qmx);
-		mq.push_back({false,msg,"Mr Thread",msg_win});
+		mq.push_back({false,decryptedMessage,"Mr Thread",msg_win});
 		pthread_cond_signal(&qcv);
 		pthread_mutex_unlock(&qmx);
 	}
+	
 	return 0;
 }
-
-
-
-//Garbage code
-
-	// /* Alice's key derivation: */
-	// unsigned char kA[klen];
-	// dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-	// /* Bob's key derivation: */
-	// unsigned char kB[klen];
-	// dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-
-	// printf("Alice's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kA[i]);
-	// 	}
-	// printf("\n");
-	// printf("Bob's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		printf("%02x ",kB[i]);
-	// }
-	/*exact same code, every time. 
-	d0 6b 94 ca bb 8c b0 da 5c 08 c7 2f e2 5a a9 37 61 c6 70 ab 0b ce 75 4b 87 8c d9 89 4e 4f 65 fe e6 b1 c1 aa d5 82 e8 78 ae ed 5a ee ab 9b 60 bb 3b
-	 69 2c 64 99 93 a0 d3 3a 2a d7 2d e7 68 ac fa 33 8a ab 42 fa cf 83 36 8b bd 08 ad d5 29 03 27 18 42 b5 f2 73 0b d9 13 f6 03 14 6e 53 c1 ae 34 3a 
-	 a1 d9 a2 87 cf 2c b0 b4 2b f0 51 23 f1 1f 85 af 70 05 f0 d7 4a 46 d5 7d 45 95 eb a9 2a bc 9a
-	*/
-	// init("params");
-	// if(isclient && !gotPK)
-	// {
-	// 	//read from file to get other persons public key 2.
-	// 	FILE *pk2 = fopen("PublicKeyServer", "r");
-	// 	mpz_inp_str(global_user2_pk, pk2, base);
-	// 	fclose(pk2);
-	// 	gotPK = true;
-	// 	//Get DH
-	// 	dhFinal(global_user1_sk,global_user1_pk,global_user2_pk,kA,klen);
-	// 	// for (size_t i = 0; i < klen; i++) {
-	// 	// 	printf("%02x ",kA[i]);
-	// 	// }
-
-	// 	//check if they got correct pk
-	// 	FILE *DH1 = fopen("DH1-PK2", "w");
-	// 	mpz_out_str(DH1, base, global_user2_pk);
-	// 	fclose(DH1);
-	// 	// verified: received correct pk
-	// }
-	// else if (!isclient && !gotPK)
-	// {
-	// 	//read from file to get other persons public key 1.
-	// 	FILE *pk1 = fopen("PublicKeyClient", "r");
-	// 	mpz_inp_str(global_user1_pk, pk1, base);
-	// 	fclose(pk1);
-	// 	gotPK = true;
-	// 	dhFinal(global_user2_sk,global_user2_pk,global_user1_pk,kB,klen);
-	// 	// for (size_t i = 0; i < klen; i++) {
-	// 	// 	printf("%02x ",kB[i]);
-	// 	// }
-
-	// 	//check if they got correct pk
-	// 	FILE *DH2 = fopen("DH2-PK1", "w");
-	// 	mpz_out_str(DH2, base, global_user1_pk);
-	// 	fclose(DH2); 
-	// 	//verified: received correct pk
-	// }
-
-	// if(isclient)
-	// {
-	// 	log("client's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kA[i]);
-	// 		log(text);
-	// 	}
-	// }
-
-	// else
-	// {
-	// 	log("\nserver's key:\n");
-	// 	for (size_t i = 0; i < klen; i++) {
-	// 		char text[10];
-	// 		sprintf(text, "%02x", kB[i]);
-	// 		log(text);
-	// 	}
-		
-	// }
