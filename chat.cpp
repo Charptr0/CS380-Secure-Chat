@@ -500,6 +500,83 @@ int initServerNet(int port)
 		// generate RSA key for the server
 		server_rsa_keys = generateRSAKeys();
 
+<<<<<<< HEAD
+=======
+
+
+
+		// while(access("PublicKeyClient", F_OK) != 0) {
+		// 	sleep(1);
+		// }
+
+		// //Get client public key
+		// FILE *pk1 = fopen("PublicKeyClient", "r");
+		// if(pk1 == NULL) {
+		// 	error("Cannot read client dh key :(");
+		// 	exit(1);
+		// }
+
+		// mpz_inp_str(global_client_pk, pk1, base);
+		// fclose(pk1);
+
+		// dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
+
+
+		// FILE *Server_dh = fopen("Server_dh", "wb"); //write in binary format
+		// size_t r1 = fwrite(kB, sizeof kB[0], klen, Server_dh);
+		// if(r1 < 0)
+		// {
+		// 	perror("fwrite");
+		// 	exit(-1);
+		// }
+		// fclose(Server_dh);
+
+		// unsigned char kC[klen];
+
+		// // wait until the client dh_key has been fully created
+		// // i know this is bad code but it works - Chenhao
+		// while(access("Client_dh", F_OK) != 0) {
+		// 	sleep(1);
+		// }
+
+		// FILE *Client_dh = fopen("Client_dh", "rb"); 
+		// if(Client_dh == NULL) {
+		// 	error("Cannot read client dh bytes :(");
+		// 	exit(1);
+		// }
+
+		// size_t r2 = fread(kC, sizeof kC[0], klen, Client_dh);
+		// if(r2 < 0)
+		// {
+		// 	perror("fwrite");
+		// 	exit(-1);
+		// }		
+		// fclose(Client_dh);
+
+
+		// if (memcmp(kB,kC,klen) != 0)
+		// {
+		// 	printf("\nError: Client did not match server dh\n");
+		// 	printf("\nServer SH\n");
+		// 	for (size_t i = 0; i < klen; i++) {
+		// 		printf("%02x ",kB[i]);
+		// 	}
+		// 	printf("\nClient SH\n");
+		// 	for (size_t i = 0; i < klen; i++) {
+		// 		printf("%02x ",kC[i]);
+		// 	}
+		// 	// should_exit = true;
+		// 	printf("\n");
+		// 	exit(-1);
+		// }
+
+		// memset(kC, 0, sizeof(kC)); //erase information
+
+
+		// generate RSA key for the server
+		server_rsa_keys = generateRSAKeys();
+
+>>>>>>> d01a4988d6883b6d5e100e904a24a583a54202f1
 		// write the public key to file
 		FILE* serverPublicRSAKeyFs = fopen(SERVER_PUBLIC_RSA_KEY_PATH, "w");
 		if(serverPublicRSAKeyFs == NULL) exit(1);
@@ -640,6 +717,7 @@ static int initClientNet(char* hostname, int port)
 		// 	printf("%02x ",kA[i]);
 		// }
 
+<<<<<<< HEAD
 		// Sending CLIENT DHFinal
 		if(send(sockfd, kA, sizeof(kA), 0) < 0) 
 		{
@@ -659,6 +737,101 @@ static int initClientNet(char* hostname, int port)
 			printf("DHfinal keys match\n");
 
 		memset(kB, 0, sizeof(kB)); //erase information
+=======
+
+
+
+		
+		// while(access("PublicKeyServer", F_OK) != 0) {
+		// 	sleep(1);
+		// }
+
+		// //read from file to get Server public key
+		// FILE *pk2 = fopen("PublicKeyServer", "r");
+		// if(pk2 == NULL) {
+		// 	error("Cannot read server dh key :(");
+		// 	exit(1);
+		// }
+
+		// mpz_inp_str(global_server_pk, pk2, base);
+		// fclose(pk2);
+
+		// //Get DH
+		// dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen);
+		// // for (size_t i = 0; i < klen; i++) {
+		// // 	printf("%02x ",kA[i]);
+		// // }
+
+		// logEncryptedMessage(kA, 128);
+
+		// //write to file ClientDH in binary format
+		// FILE *Client_dh = fopen("Client_dh", "wb"); 
+		// size_t r1 = fwrite(kA, sizeof kA[0], klen, Client_dh);
+		// if(r1 < 0)
+		// {
+		// 	perror("fwrite");
+		// 	exit(-1);
+		// }
+
+		// fflush(Client_dh);
+		// fclose(Client_dh);
+
+		// unsigned char kC[klen];
+
+		// while(access("Server_dh", F_OK) != 0) {
+		// 	sleep(1);
+		// }
+		
+		// FILE *Server_dh = fopen("Server_dh", "rb");
+		// if(Server_dh == NULL) {
+		// 	error("Cannot read server dh bytes :(");
+		// 	exit(1);
+		// } 
+
+		// size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
+		// if(r2 < 0)
+		// {
+		// 	perror("fwrite");
+		// 	exit(-1);
+		// }
+		// fclose(Server_dh);
+
+		// if (memcmp(kA,kC,klen) != 0)
+		// {
+		// 	sleep(1);
+
+		// 	//Client is weird
+		// 	while(access("Server_dh", F_OK) != 0) {
+		// 		sleep(1);
+		// 	}
+
+		// 	FILE *Server_dh = fopen("Server_dh", "rb"); 
+		// 	size_t r2 = fread(kC, sizeof kC[0], klen, Server_dh);
+		// 	if(r2 < 0)
+		// 	{
+		// 		perror("fwrite");
+		// 		exit(-1);
+		// 	}
+		// 	fclose(Server_dh);
+			
+		// 	if (memcmp(kA,kC,klen) != 0)
+		// 	{
+		// 		printf("\nError: Server did not match client dh\n");
+		// 		printf("Client SH\n");
+		// 			for (size_t i = 0; i < klen; i++) {
+		// 			printf("%02x ",kA[i]);
+		// 		}
+		// 		printf("\nServer SH\n");
+		// 		for (size_t i = 0; i < klen; i++) {
+		// 			printf("%02x ",kC[i]);
+		// 		}	
+		// 		// should_exit = true;
+		// 		printf("\n");
+		// 		exit(-1);
+		// 	}
+		// }
+		// memset(kC, 0, sizeof(kC)); //erase information
+>>>>>>> d01a4988d6883b6d5e100e904a24a583a54202f1
 
 		// generate RSA key for the client
 		client_rsa_keys = generateRSAKeys();
