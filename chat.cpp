@@ -640,7 +640,6 @@ static int initClientNet(char* hostname, int port)
 		// 	printf("%02x ",kA[i]);
 		// }
 
-<<<<<<< HEAD
 		// Sending CLIENT DHFinal
 		if(send(sockfd, kA, sizeof(kA), 0) < 0) 
 		{
@@ -660,7 +659,6 @@ static int initClientNet(char* hostname, int port)
 			printf("DHfinal keys match\n");
 
 		memset(kB, 0, sizeof(kB)); //erase information
-=======
 
 		// generate RSA key for the client
 		client_rsa_keys = generateRSAKeys();
