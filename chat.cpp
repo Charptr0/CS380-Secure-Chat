@@ -411,20 +411,23 @@ int initServerNet(int port)
 
 		// printf("%llu\n", a);
 
-
-		//CALCULATE SIZE OF SERVER PK
-		size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base);
 		//SENDING SIZE OF SERVER PK
+		size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base) + 1;
 		if(send(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
 			perror("send");
 
-		char server_pk[SERVER_SIZE];
-		mpz_get_str(server_pk, base, global_server_pk); //convert to string
+		//RECEIVING SIZE OF CLIENT PK
+		size_t CLIENT_SIZE;
+		if(recv(sockfd, &CLIENT_SIZE, sizeof(CLIENT_SIZE), 0) < 0)
+				perror("recv");
  		
- 		//send server_pk
+ 		//convert to string	
+		char server_pk[SERVER_SIZE];
+		mpz_get_str(server_pk, base, global_server_pk);
+
+ 		//SEND SERVER PK
 		if(send(sockfd, server_pk, SERVER_SIZE, 0) < 0)
 		{
-			// perror("send");
 			printf("Error sending server_pk: [%s]\n", strerror(errno));
 			exit(-1);
 		}
@@ -434,11 +437,7 @@ int initServerNet(int port)
 		}
 
 
-		// //RECEIVING CLIENT PK
-		size_t CLIENT_SIZE;
-		if(recv(sockfd, &CLIENT_SIZE, sizeof(CLIENT_SIZE), 0) < 0)
-				perror("recv");
-
+		//RECEIVING CLIENT PK
 		char client_pk[CLIENT_SIZE];
 		if(recv(sockfd, client_pk, CLIENT_SIZE, 0) < 0) //recv client_pk
 		{
@@ -450,7 +449,6 @@ int initServerNet(int port)
 			printf("Received client_pk successful\n");
 			mpz_set_str(global_client_pk, client_pk, base);
 		}
-
 		//Print output for size and pk
 		// printf("SERVER SIZE: %d\n", sizeof(server_pk));
 		// printf("CLIENT Size: %d\n", sizeof(client_pk));
@@ -493,7 +491,7 @@ int initServerNet(int port)
 			exit(-1);
 		}
 		else
-			printf("DHfinal keys match\n");
+			printf("\nDHfinal keys match\n");
 
 		memset(kA, 0, sizeof(kA)); //erase information
 
@@ -579,7 +577,16 @@ static int initClientNet(char* hostname, int port)
 		size_t SERVER_SIZE;
 		if(recv(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
 			perror("recv");
-		
+
+		//SEND SIZE OF CLIENT PK
+		size_t CLIENT_SIZE = mpz_sizeinbase(global_client_pk, base) + 1;
+		if(send(sockfd, &CLIENT_SIZE, sizeof(CLIENT_SIZE), 0) < 0)
+			perror("send");	
+
+		//convert to string
+		char client_pk[CLIENT_SIZE];
+		mpz_get_str(client_pk, base, global_client_pk);
+
 		// Receiving SERVER PK
 		char server_pk[SERVER_SIZE];
 		if(recv(sockfd, server_pk, SERVER_SIZE, 0) < 0) //recv server_pk
@@ -590,18 +597,9 @@ static int initClientNet(char* hostname, int port)
 		else
 		{
 			printf("Received server_pk successful\n");
-			mpz_set_str(global_server_pk, server_pk, base);
 		}
 
-		//Calculating size of CLIENT PK
-		size_t CLIENT_SIZE = mpz_sizeinbase(global_client_pk, base);
-		if(send(sockfd, &CLIENT_SIZE, sizeof(CLIENT_SIZE), 0) < 0)
-			perror("send");
-
-		char client_pk[CLIENT_SIZE];
-		mpz_get_str(client_pk, base, global_client_pk); //convert to string
-
-		//send client_pk
+		//SEND CLIENT PK
 		if(send(sockfd, client_pk, CLIENT_SIZE, 0) < 0) 
 		{
 			printf("Error sending client_pk: [%s]\n", strerror(errno));
@@ -610,6 +608,7 @@ static int initClientNet(char* hostname, int port)
 		else
 		{
 			printf("Sent client_pk successful\n");
+			mpz_set_str(global_server_pk, server_pk, base);
 		}
 
 		//Print output for size and pk
@@ -617,11 +616,11 @@ static int initClientNet(char* hostname, int port)
 		// printf("SERVER Size: %d\n", sizeof(server_pk));
 
 		// printf("Client_pk\n%s\nServer_pk\n%s\n", client_pk, server_pk);
-
-		// //Generate DHFINAL
-		// printf("CLIENT DHFINAL\n");
+		
+		//Generate DHFINAL
 		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen); //create dhfinal
-
+		
+		// printf("CLIENT DHFINAL\n");
 		// for (size_t i = 0; i < klen; i++) {
 		// 	printf("%02x ",kA[i]);
 		// }
@@ -656,7 +655,7 @@ static int initClientNet(char* hostname, int port)
 			exit(-1);
 		}
 		else
-			printf("DHfinal keys match\n");
+			printf("\nDHfinal keys match\n");
 
 		memset(kB, 0, sizeof(kB)); //erase information
 
