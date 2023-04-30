@@ -74,10 +74,6 @@ RSA* client_rsa_pk;
 int global_encryptedMessageLen = 256;
 int global_encodedMessageLen = 256;
 
-// file paths
-const char* CLIENT_PUBLIC_RSA_KEY_PATH = "clientPublicRSAKey.pem";
-const char* SERVER_PUBLIC_RSA_KEY_PATH = "serverPublicRSAKey.pem";
-
 const size_t klen = 128;
 int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
 bool isclient; //turned global for convienence
@@ -226,24 +222,35 @@ RSA* generateRSAKeys() {
  * @author Chenhao L.
 */
 char* encryptMessage(const char* message) {
-
-	const char* otherUserPublicKeyPath = isclient ? SERVER_PUBLIC_RSA_KEY_PATH : CLIENT_PUBLIC_RSA_KEY_PATH;
-
-	// read pk
-	FILE* fs = fopen(otherUserPublicKeyPath, "r");
-	if(fs == NULL) exit(1);
-
-	RSA* otherUserRSAPublicKey = PEM_read_RSA_PUBKEY(fs, NULL, NULL, NULL);
-
 	// encrypt using the other user's pk
 	size_t len = strlen(message);
-	unsigned char* encryptedMessage = (unsigned char*)malloc(RSA_size(otherUserRSAPublicKey));
-	int encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, otherUserRSAPublicKey, RSA_PKCS1_OAEP_PADDING);
-	if (encryptedMessageLen == -1) exit(1);
 
-	fclose(fs);
+	unsigned char* encryptedMessage;
+	int encryptedMessageLen;
 
-	global_encryptedMessageLen = encryptedMessageLen;
+
+
+	if(isclient) {
+	 	encryptedMessage = (unsigned char*)malloc(RSA_size(server_rsa_pk));
+		encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, server_rsa_pk, RSA_PKCS1_OAEP_PADDING);
+		global_encryptedMessageLen = encryptedMessageLen;
+		
+		if (encryptedMessageLen == -1) {
+			log("Cannot encrypt");
+			exit(1);
+		}
+	} 
+	
+	else {
+		encryptedMessage = (unsigned char*)malloc(RSA_size(client_rsa_pk));
+		encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, client_rsa_pk, RSA_PKCS1_OAEP_PADDING);
+		global_encryptedMessageLen = encryptedMessageLen;
+		
+		if (encryptedMessageLen == -1) {
+			log("Cannot encrypt");
+			exit(1);
+		}
+	}
 
 	// encode into base64
 	return convertBytesToBase64(encryptedMessage, encryptedMessageLen);
@@ -259,17 +266,29 @@ char* decryptMessage(const char* encodedMessage) {
 	// decrypt the base64 encoded msg
 	unsigned char* encryptedMessageInBytes = convertBase64ToBytes(encodedMessage);
 
-	// decrypt the encrytion by using the user's private key
-	RSA* keys = isclient ? client_rsa_keys : server_rsa_keys;
+	char* pt;
 
-	char* pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
-	size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,keys, RSA_PKCS1_OAEP_PADDING);
+	if(isclient) {
+		pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
+		size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,client_rsa_keys, RSA_PKCS1_OAEP_PADDING);
 
-	if(ptlen == -1) {
-		should_exit = true;
-		exit(1);
+		if(ptlen == -1) {
+			log("Client: Cannot decrypt");
+			return (char*) encodedMessage;
+		}
+
 	}
 
+	else {
+		pt = (char*)malloc(5000 * sizeof(char));
+		size_t ptlen = RSA_private_decrypt(256, encryptedMessageInBytes,(unsigned char*)pt,server_rsa_keys, RSA_PKCS1_OAEP_PADDING);
+
+		if(ptlen == -1) {
+			log("Server: Cannot decrypt");
+			return (char*) encodedMessage;
+		}
+	}
+	
 	return pt;
 }
 
@@ -365,9 +384,16 @@ int initServerNet(int port)
 
 	// encoded it so it can sent thru socket
 	BIO* bio = BIO_new(BIO_s_mem());
+	BUF_MEM* bio_buffer = NULL;
 	PEM_write_bio_RSA_PUBKEY(bio, server_rsa_pk);
-	unsigned char* encoded_server_pk;
-	int encoded_server_pk_size = BIO_get_mem_data(bio, &encoded_server_pk) + 1;
+
+	BIO_get_mem_ptr(bio, &bio_buffer);
+
+	char* pk_str = (char*)malloc(bio_buffer->length + 1);
+	memcpy(pk_str, bio_buffer->data, bio_buffer->length);
+	pk_str[bio_buffer->length] = '\0';
+
+	BIO_free(bio);
 
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -460,33 +486,38 @@ int initServerNet(int port)
 
 		memset(kA, 0, sizeof(kA)); //erase information
 
-		//SENDING SIZE OF SERVER RSA PK
-		if(send(sockfd, &encoded_server_pk_size, sizeof(encoded_server_pk_size), 0) < 0)
+		// send server rsa pk
+		if(send(sockfd, pk_str, strlen(pk_str), 0) < 0) {
 			perror("send");
+		} else printf("Sent server pk\n");
 		
-		size_t encoded_client_rsa_pk_size;
-		if(recv(sockfd, &encoded_client_rsa_pk_size, sizeof(encoded_client_rsa_pk_size), 0) < 0)
+
+		// recv client rsa pk;
+		char* other_user_pk = (char*)malloc(1000);
+
+		if(recv(sockfd, other_user_pk, 1000, 0) < 0) {
 			perror("recv");
+		} else printf("Got client rsa pk\n");
 			
+		printf("%s", other_user_pk);
 
- 		//SEND SERVER RSA Pk
-		if(send(sockfd, encoded_server_pk, encoded_server_pk_size, 0) < 0)
-		{
-			printf("Error sending server rsa pk: [%s]\n", strerror(errno));
+		BIO* bio_key = BIO_new_mem_buf(pk_str, strlen(pk_str));
+		if(bio_key == NULL) {
+			printf("Cannot create bio object\n");
 			exit(-1);
-		} else printf("Sent encoded server rsa pk\n");
+		}
 
-		unsigned char encoded_client_rsa_pk_key[1000];
-
-		// encoded_client_rsa_pk_key[encoded_client_rsa_pk_size - 1] = '\0';
-
-		// Receiving client RSA PK
-		if(recv(sockfd, encoded_client_rsa_pk_key,encoded_client_rsa_pk_size, 0) < 0) //recv server_pk
-		{	
-			printf("Error receiving client rsa pk: [%s]\n", strerror(errno));
+		client_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio_key, NULL, NULL, NULL);
+		if(client_rsa_pk == NULL) {
+			printf("Cannot create server pk");
 			exit(-1);
-		} else printf("Received encoded client rsa pk\n");
+		}
 
+		// FILE* fs = fopen("got_client.pem", "w");
+		// PEM_write_RSA_PUBKEY(fs, client_rsa_pk);
+		// fclose(fs);
+
+		BIO_free(bio_key);
 	}
 	close(listensock);
 
@@ -528,10 +559,16 @@ static int initClientNet(char* hostname, int port)
 
 	// encoded it so it can sent thru socket
 	BIO* bio = BIO_new(BIO_s_mem());
+	BUF_MEM* bio_buffer = NULL;
 	PEM_write_bio_RSA_PUBKEY(bio, client_rsa_pk);
-	unsigned char* encoded_client_pk;
-	int encoded_client_pk_size = BIO_get_mem_data(bio, &encoded_client_pk) + 1;
 
+	BIO_get_mem_ptr(bio, &bio_buffer);
+
+	char* pk_str = (char*)malloc(bio_buffer->length + 1);
+	memcpy(pk_str, bio_buffer->data, bio_buffer->length);
+	pk_str[bio_buffer->length] = '\0';
+
+	BIO_free(bio);
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	struct hostent *server;
@@ -621,32 +658,35 @@ static int initClientNet(char* hostname, int port)
 		memset(kB, 0, sizeof(kB)); //erase information
 
 		//RECEIVE SIZE OF SERVER RSA PK
-		size_t encoded_server_rsa_pk_size;
-		if(recv(sockfd, &encoded_server_rsa_pk_size, sizeof(encoded_server_rsa_pk_size), 0) < 0)
+		char* other_user_pk = (char*)malloc(1000);
+		if(recv(sockfd, other_user_pk, 1000, 0) < 0) {
 			perror("recv");
-
-		//SEND size of client rsa pk
-		if(send(sockfd, &encoded_client_pk_size, sizeof(encoded_client_pk_size), 0) < 0)
-			perror("send");
-
-		unsigned char encoded_server_rsa_pk[encoded_server_rsa_pk_size];
-
-		// Receiving SERVER RSA PK
-		if(recv(sockfd, encoded_server_rsa_pk, encoded_server_rsa_pk_size, 0) < 0) //recv server_pk
-		{	
-			printf("Error receiving server rsa pk: [%s]\n", strerror(errno));
-			exit(-1);
-		} else printf("Received encoded server rsa pk\n");
-
-		BIO* bio = BIO_new_mem_buf(encoded_server_rsa_pk, encoded_client_pk_size);
-		server_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio, NULL, NULL, NULL);
+		} else printf("Got server rsa pk\n");
 
 		// send client rsa pk
-		if(send(sockfd, encoded_client_pk, encoded_client_pk_size, 0) < 0)
-		{
-			printf("Error sending client rsa pk: [%s]\n", strerror(errno));
+		if(send(sockfd, pk_str, strlen(pk_str), 0) < 0) {
+			perror("send");
+		} else printf("Sended client rsa pk\n");
+
+
+		printf("%s", other_user_pk);
+
+		BIO* bio_key = BIO_new_mem_buf(pk_str, strlen(pk_str));
+		if(bio_key == NULL) {
+			printf("Cannot create bio object\n");
 			exit(-1);
-		} else printf("Sent encoded client rsa pk\n");
+		}
+
+		server_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio_key, NULL, NULL, NULL);
+		if(server_rsa_pk == NULL) {
+			printf("Cannot create server pk");
+			exit(-1);
+		}
+		// FILE* fs = fopen("got_server.pem", "w");
+		// PEM_write_RSA_PUBKEY(fs, server_rsa_pk);
+		// fclose(fs);
+
+		BIO_free(bio_key);
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
