@@ -67,14 +67,13 @@ mpz_t global_server_sk;
 
 // global rsa keys
 RSA* server_rsa_keys;
+RSA* server_rsa_pk;
 RSA* client_rsa_keys;
+RSA* client_rsa_pk;
 
 int global_encryptedMessageLen = 256;
 int global_encodedMessageLen = 256;
-
-// file paths
-const char* CLIENT_PUBLIC_RSA_KEY_PATH = "clientPublicRSAKey.pem";
-const char* SERVER_PUBLIC_RSA_KEY_PATH = "serverPublicRSAKey.pem";
+const int MAX_RSA_BUFFER = 1024;
 
 const size_t klen = 128;
 int base = 62; //why? idk. refer to https://gmplib.org/manual/I_002fO-of-Integers#I_002fO-of-Integers
@@ -152,21 +151,6 @@ void logEncryptedMessage(const char* encryptedMessage) {
 }
 
 /**
- * Delete Server_dh and Client_dh files due to sync issues
- * @author Chenhao L.
-*/
-void deleteDHFiles() {
-	if(access("Client_dh", W_OK) == 0) {
-		remove("Client_dh");
-	}
-
-	if(access("Server_dh", W_OK) == 0) {
-		remove("Server_dh");
-	}
-}
-
-
-/**
  * Convert the encrypted bytes into base 64 to transfer across the channel
  * @param bytes - The encrypted bits
  * @param len - the size of the bits
@@ -239,24 +223,39 @@ RSA* generateRSAKeys() {
  * @author Chenhao L.
 */
 char* encryptMessage(const char* message) {
-
-	const char* otherUserPublicKeyPath = isclient ? SERVER_PUBLIC_RSA_KEY_PATH : CLIENT_PUBLIC_RSA_KEY_PATH;
-
-	// read pk
-	FILE* fs = fopen(otherUserPublicKeyPath, "r");
-	if(fs == NULL) exit(1);
-
-	RSA* otherUserRSAPublicKey = PEM_read_RSA_PUBKEY(fs, NULL, NULL, NULL);
-
 	// encrypt using the other user's pk
 	size_t len = strlen(message);
-	unsigned char* encryptedMessage = (unsigned char*)malloc(RSA_size(otherUserRSAPublicKey));
-	int encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, otherUserRSAPublicKey, RSA_PKCS1_OAEP_PADDING);
-	if (encryptedMessageLen == -1) exit(1);
 
-	fclose(fs);
+	unsigned char* encryptedMessage;
+	int encryptedMessageLen; 
 
-	global_encryptedMessageLen = encryptedMessageLen;
+	if(isclient) {
+	 	encryptedMessage = (unsigned char*)malloc(RSA_size(server_rsa_pk));
+
+		// encrypt using the server's pk
+		encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, server_rsa_pk, RSA_PKCS1_OAEP_PADDING);
+		global_encryptedMessageLen = encryptedMessageLen;
+		
+		// encryption failed
+		if (encryptedMessageLen == -1) {
+			log("Cannot encrypt");
+			exit(1);
+		}
+	} 
+	
+	else {
+		encryptedMessage = (unsigned char*)malloc(RSA_size(client_rsa_pk));
+
+		// encrypt using the client's pk
+		encryptedMessageLen = RSA_public_encrypt(len+1, (unsigned char*)message, encryptedMessage, client_rsa_pk, RSA_PKCS1_OAEP_PADDING);
+		global_encryptedMessageLen = encryptedMessageLen;
+		
+		// encryption failed
+		if (encryptedMessageLen == -1) {
+			log("Cannot encrypt");
+			exit(1);
+		}
+	}
 
 	// encode into base64
 	return convertBytesToBase64(encryptedMessage, encryptedMessageLen);
@@ -272,17 +271,33 @@ char* decryptMessage(const char* encodedMessage) {
 	// decrypt the base64 encoded msg
 	unsigned char* encryptedMessageInBytes = convertBase64ToBytes(encodedMessage);
 
-	// decrypt the encrytion by using the user's private key
-	RSA* keys = isclient ? client_rsa_keys : server_rsa_keys;
+	char* pt;
 
-	char* pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
-	size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,keys, RSA_PKCS1_OAEP_PADDING);
+	if(isclient) {
+		pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
 
-	if(ptlen == -1) {
-		should_exit = true;
-		exit(1);
+		// decrypt using its private key
+		size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,client_rsa_keys, RSA_PKCS1_OAEP_PADDING);
+
+		if(ptlen == -1) {
+			// just return the encoded message
+			log("Client: Cannot decrypt");
+			return (char*) encodedMessage;
+		}
+
 	}
 
+	else {
+		pt = (char*)malloc(global_encryptedMessageLen * sizeof(char));
+		size_t ptlen = RSA_private_decrypt(global_encryptedMessageLen, encryptedMessageInBytes,(unsigned char*)pt,server_rsa_keys, RSA_PKCS1_OAEP_PADDING);
+
+		// decrypt using its private key
+		if(ptlen == -1) {
+			log("Server: Cannot decrypt");
+			return (char*) encodedMessage;
+		}
+	}
+	
 	return pt;
 }
 
@@ -347,8 +362,6 @@ void hmacServer(const char* message)
 // required handshake with the client
 int initServerNet(int port)
 {
-	deleteDHFiles();
-
 	if (init("params") != 0) {
 		log("initServerNet: Cannot init Diffie Hellman key exchange :(");
 		printf("Cannot init Diffie Hellman key exchange :(");
@@ -371,10 +384,34 @@ int initServerNet(int port)
 		should_exit = true;
 		exit(-1);
 	}
-	//store Server public key (g^a mod p) to file "PublicKeyServer". 
-	FILE *pk2 = fopen("PublicKeyServer", "w");
-	mpz_out_str(pk2, base, global_server_pk);
-	fclose(pk2);
+
+	// generate RSA key for the server
+	server_rsa_keys = generateRSAKeys();
+
+	printf("Generated server rsa pk\n");
+	PEM_write_RSA_PUBKEY(stdout, server_rsa_keys);
+
+	// convert the public key to a string
+	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
+	if(!PEM_write_bio_RSA_PUBKEY(bio_rsa_key, server_rsa_keys)) {
+		printf("Cannot create public key\n");
+		exit(1);
+	}
+
+	// some magic happens here
+	char* pk_str = NULL;
+	long bio_mem_size = BIO_get_mem_data(bio_rsa_key, &pk_str);
+	pk_str = (char*)malloc(bio_mem_size + 1);
+	if(pk_str == NULL) {
+		printf("Cannot process public key\n");
+		exit(1);
+	}
+
+	memset(pk_str, 0, bio_mem_size + 1);
+	BIO_read(bio_rsa_key, pk_str, bio_mem_size);
+	BIO_free(bio_rsa_key);
+
+	// pk_str should now have our pk in pem format
 
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
@@ -398,19 +435,6 @@ int initServerNet(int port)
 		error("error on accept");
 	else
 	{
-		// size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base);
-		// unsigned long a[SERVER_SIZE];
-		// BYTES2Z(global_server_pk, a, SERVER_SIZE);
-		// size_t a_size = sizeof(a);
-		// printf("SIZE OF A: %ld\nSERVER_SIZE: %d\n", sizeof(a), SERVER_SIZE); // >5000
-
-		// if(send(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0) //doesnt work with SERVER_SIZE either
-		// 	perror("send");
-		// if(send(sockfd, a, a_size, 0) < 0)
-		// 	perror("send");
-
-		// printf("%llu\n", a);
-
 		//SENDING SIZE OF SERVER PK
 		size_t SERVER_SIZE = mpz_sizeinbase(global_server_pk, base) + 1;
 		if(send(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
@@ -419,7 +443,7 @@ int initServerNet(int port)
 		//RECEIVING SIZE OF CLIENT PK
 		size_t CLIENT_SIZE;
 		if(recv(sockfd, &CLIENT_SIZE, sizeof(CLIENT_SIZE), 0) < 0)
-				perror("recv");
+			perror("recv");
  		
  		//convert to string	
 		char server_pk[SERVER_SIZE];
@@ -449,18 +473,8 @@ int initServerNet(int port)
 			printf("Received client_pk successful\n");
 			mpz_set_str(global_client_pk, client_pk, base);
 		}
-		//Print output for size and pk
-		// printf("SERVER SIZE: %d\n", sizeof(server_pk));
-		// printf("CLIENT Size: %d\n", sizeof(client_pk));
-
-		// printf("Server_pk\n%s\nClient_pk\n%s\n", server_pk, client_pk);
 		
-		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen); //create dhfinal
-
-		// printf("SERVER DHFINAL\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kB[i]);
-		// }								
+		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen); //create dhfinal							
 
 		//Sending SERVER DHFinal
 		if(send(sockfd, kB, sizeof(kB), 0) < 0) 
@@ -480,11 +494,6 @@ int initServerNet(int port)
 		else
 			printf("Received client_dhf successful\n");
 
-		// printf("Client's key:\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
-
 		if (memcmp(kB,kA,klen) != 0)
 		{
 			printf("No match\n");
@@ -495,15 +504,34 @@ int initServerNet(int port)
 
 		memset(kA, 0, sizeof(kA)); //erase information
 
-		// generate RSA key for the server
-		server_rsa_keys = generateRSAKeys();
-
-		// write the public key to file
-		FILE* serverPublicRSAKeyFs = fopen(SERVER_PUBLIC_RSA_KEY_PATH, "w");
-		if(serverPublicRSAKeyFs == NULL) exit(1);
-		PEM_write_RSA_PUBKEY(serverPublicRSAKeyFs, server_rsa_keys);
-		fclose(serverPublicRSAKeyFs);
+		// send server rsa pk
+		if(send(sockfd, pk_str, strlen(pk_str), 0) < 0) {
+			perror("send");
+		} else printf("Sent server pk\n");
 		
+
+		// recv client rsa pk;
+		char* other_user_pk = (char*)malloc(MAX_RSA_BUFFER * sizeof(char));
+		if(recv(sockfd, other_user_pk, MAX_RSA_BUFFER, 0) < 0) {
+			perror("recv");
+		} else printf("Got client rsa pk\n");
+		
+		// convert the key to RSA*
+		BIO* bio_key = BIO_new_mem_buf(other_user_pk, strlen(other_user_pk));
+		if(bio_key == NULL) {
+			printf("Cannot create bio object\n");
+			exit(-1);
+		}
+
+		// update global variable
+		client_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio_key, NULL, NULL, NULL);
+		if(client_rsa_pk == NULL) {
+			printf("Cannot create server pk\n");
+			exit(-1);
+		}
+
+		BIO_free(bio_key);
+		free(other_user_pk);
 	}
 	close(listensock);
 
@@ -537,10 +565,30 @@ static int initClientNet(char* hostname, int port)
 		exit(-1);
 	}
 
-	//store Client public key (g^b mod p) to file "PublicKeyClient". 
-	FILE *pk1 = fopen("PublicKeyClient", "w");
-	mpz_out_str(pk1, base, global_client_pk);
-	fclose(pk1);
+	// generate RSA key for the client
+	client_rsa_keys = generateRSAKeys();
+	printf("Generated client rsa keys\n");
+	PEM_write_RSA_PUBKEY(stdout, client_rsa_keys);
+
+	// convert the pk to a string
+	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
+	if(!PEM_write_bio_RSA_PUBKEY(bio_rsa_key, client_rsa_keys)) {
+		printf("Cannot create public key\n");
+		exit(1);
+	}
+
+	char* pk_str = NULL;
+
+	long bio_mem_size = BIO_get_mem_data(bio_rsa_key, &pk_str);
+	pk_str = (char*)malloc(bio_mem_size + 1);
+	if(pk_str == NULL) {
+		printf("Cannot process public key\n");
+		exit(1);
+	}
+
+	memset(pk_str, 0, bio_mem_size + 1);
+	BIO_read(bio_rsa_key, pk_str, bio_mem_size);
+	BIO_free(bio_rsa_key);
 
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -560,19 +608,6 @@ static int initClientNet(char* hostname, int port)
 		error("ERROR connecting");
 	else
 	{
-		// size_t SERVER_SIZE;
-		// if(recv(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
-		// 	perror("recv");
-
-		// unsigned long a[SERVER_SIZE];
-
-		// if(recv(sockfd, a, SERVER_SIZE, 0) < 0)
-		// 	perror("recv");
-		// printf("SIZE Of A: %d\nSERVER_SIZE: %ld\n",sizeof(a), SERVER_SIZE); //data coming in does not match
-		// printf("%llu\n", a);
-		// Z2BYTES(a,SERVER_SIZE,global_server_pk);
-
-
 		//RECEIVE SIZE OF SERVER PK
 		size_t SERVER_SIZE;
 		if(recv(sockfd, &SERVER_SIZE, sizeof(SERVER_SIZE), 0) < 0)
@@ -610,20 +645,9 @@ static int initClientNet(char* hostname, int port)
 			printf("Sent client_pk successful\n");
 			mpz_set_str(global_server_pk, server_pk, base);
 		}
-
-		//Print output for size and pk
-		// printf("Client Size: %d\n", sizeof(client_pk));
-		// printf("SERVER Size: %d\n", sizeof(server_pk));
-
-		// printf("Client_pk\n%s\nServer_pk\n%s\n", client_pk, server_pk);
 		
 		//Generate DHFINAL
 		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen); //create dhfinal
-		
-		// printf("CLIENT DHFINAL\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
 
 		//Receiving SERVER DHFinal
 		if(recv(sockfd, kB, sizeof(kB), 0) < 0) 
@@ -633,11 +657,6 @@ static int initClientNet(char* hostname, int port)
 		}
 		else
 			printf("Received server_dhf successful\n");
-		
-		// printf("SERVER's key:\n");
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
 
 		// Sending CLIENT DHFinal
 		if(send(sockfd, kA, sizeof(kA), 0) < 0) 
@@ -659,15 +678,33 @@ static int initClientNet(char* hostname, int port)
 
 		memset(kB, 0, sizeof(kB)); //erase information
 
-		// generate RSA key for the client
-		client_rsa_keys = generateRSAKeys();
+		//RECEIVE SIZE OF SERVER RSA PK
+		char* other_user_pk = (char*)malloc(MAX_RSA_BUFFER * sizeof(char));
+		if(recv(sockfd, other_user_pk, MAX_RSA_BUFFER, 0) < 0) {
+			perror("recv");
+		} else printf("Got server rsa pk\n");
 
-		// write the public key to file
-		FILE* clientPublicRSAKeyFs = fopen(CLIENT_PUBLIC_RSA_KEY_PATH, "w");
-		if(clientPublicRSAKeyFs == NULL) exit(1);
-		PEM_write_RSA_PUBKEY(clientPublicRSAKeyFs, client_rsa_keys);
-		fclose(clientPublicRSAKeyFs);
+		// send client rsa pk
+		if(send(sockfd, pk_str, strlen(pk_str), 0) < 0) {
+			perror("send");
+		} else printf("Sended client rsa pk\n");
 
+
+		BIO* bio_key = BIO_new_mem_buf(other_user_pk, strlen(other_user_pk));
+		if(bio_key == NULL) {
+			printf("Cannot create bio object\n");
+			exit(-1);
+		}
+
+		// update global variable
+		server_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio_key, NULL, NULL, NULL);
+		if(server_rsa_pk == NULL) {
+			printf("Cannot create server pk");
+			exit(-1);
+		}
+
+		BIO_free(bio_key);
+		free(other_user_pk);
 	}
 	/* at this point, should be able to send/recv on sockfd */
 
@@ -743,44 +780,6 @@ static void msg_win_redisplay(bool batch, const string& newmsg="", const string&
 
 static void msg_typed(char *line)
 { 
-	if(isclient && !gotPK)
-	{
-		//read from file to get other persons public key 2.
-		FILE *pk2 = fopen("PublicKeyServer", "r");
-		mpz_inp_str(global_server_pk, pk2, base);
-		fclose(pk2);
-		gotPK = true;
-		//Get DH
-		dhFinal(global_client_sk,global_client_pk,global_server_pk,kA,klen);
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kA[i]);
-		// }
-
-		//check if they got correct pk
-		FILE *DH1 = fopen("DH1-PK2", "w");
-		mpz_out_str(DH1, base, global_server_pk);
-		fclose(DH1);
-		// verified: received correct pk
-	}
-	else if (!isclient && !gotPK)
-	{
-		//read from file to get other persons public key 1.
-		FILE *pk1 = fopen("PublicKeyClient", "r");
-		mpz_inp_str(global_client_pk, pk1, base);
-		fclose(pk1);
-		gotPK = true;
-		dhFinal(global_server_sk,global_server_pk,global_client_pk,kB,klen);
-		// for (size_t i = 0; i < klen; i++) {
-		// 	printf("%02x ",kB[i]);
-		// }
-
-		//check if they got correct pk
-		FILE *DH2 = fopen("DH2-PK1", "w");
-		mpz_out_str(DH2, base, global_client_pk);
-		fclose(DH2); 
-		//verified: received correct pk
-	}
-
 	// If client and DH is calculated then we can do HMAC
 	if (isclient && gotPK){
 		hmacClient(line);
