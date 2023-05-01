@@ -226,9 +226,7 @@ char* encryptMessage(const char* message) {
 	size_t len = strlen(message);
 
 	unsigned char* encryptedMessage;
-	int encryptedMessageLen;
-
-
+	int encryptedMessageLen; 
 
 	if(isclient) {
 	 	encryptedMessage = (unsigned char*)malloc(RSA_size(server_rsa_pk));
@@ -378,23 +376,28 @@ int initServerNet(int port)
 
 	// generate RSA key for the server
 	server_rsa_keys = generateRSAKeys();
-
 	// get the pk
-	RSA* server_rsa_pk = RSAPublicKey_dup(server_rsa_keys);
+	// RSA* server_rsa_pk = RSAPublicKey_dup(server_rsa_keys);
+	printf("Generated server rsa pk\n");
+	PEM_write_RSA_PUBKEY(stdout, server_rsa_keys);
+	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
+	if(!PEM_write_bio_RSA_PUBKEY(bio_rsa_key, server_rsa_keys)) {
+		printf("Cannot create public key\n");
+		exit(1);
+	}
 
-	// encoded it so it can sent thru socket
-	BIO* bio = BIO_new(BIO_s_mem());
-	BUF_MEM* bio_buffer = NULL;
-	PEM_write_bio_RSA_PUBKEY(bio, server_rsa_pk);
+	char* pk_str = NULL;
 
-	BIO_get_mem_ptr(bio, &bio_buffer);
+	long bio_mem_size = BIO_get_mem_data(bio_rsa_key, &pk_str);
+	pk_str = (char*)malloc(bio_mem_size + 1);
+	if(pk_str == NULL) {
+		printf("Cannot process public key\n");
+		exit(1);
+	}
 
-	char* pk_str = (char*)malloc(bio_buffer->length + 1);
-	memcpy(pk_str, bio_buffer->data, bio_buffer->length);
-	pk_str[bio_buffer->length] = '\0';
-
-	BIO_free(bio);
-
+	memset(pk_str, 0, bio_mem_size + 1);
+	BIO_read(bio_rsa_key, pk_str, bio_mem_size);
+	
 	int reuse = 1;
 	struct sockaddr_in serv_addr;
 	listensock = socket(AF_INET, SOCK_STREAM, 0);
@@ -499,9 +502,9 @@ int initServerNet(int port)
 			perror("recv");
 		} else printf("Got client rsa pk\n");
 			
-		printf("%s", other_user_pk);
+		// printf("Got the client rsa key: %s\n", other_user_pk);
 
-		BIO* bio_key = BIO_new_mem_buf(pk_str, strlen(pk_str));
+		BIO* bio_key = BIO_new_mem_buf(other_user_pk, strlen(other_user_pk));
 		if(bio_key == NULL) {
 			printf("Cannot create bio object\n");
 			exit(-1);
@@ -509,14 +512,13 @@ int initServerNet(int port)
 
 		client_rsa_pk = PEM_read_bio_RSA_PUBKEY(bio_key, NULL, NULL, NULL);
 		if(client_rsa_pk == NULL) {
-			printf("Cannot create server pk");
+			printf("Cannot create server pk\n");
 			exit(-1);
 		}
 
-		// FILE* fs = fopen("got_client.pem", "w");
-		// PEM_write_RSA_PUBKEY(fs, client_rsa_pk);
-		// fclose(fs);
-
+		FILE* fs = fopen("client_rsa_pk.pem", "w");
+		PEM_write_RSA_PUBKEY(fs, client_rsa_pk);
+		fclose(fs);
 		BIO_free(bio_key);
 	}
 	close(listensock);
@@ -553,22 +555,30 @@ static int initClientNet(char* hostname, int port)
 
 	// generate RSA key for the client
 	client_rsa_keys = generateRSAKeys();
-
+	printf("Generated client rsa keys\n");
+	PEM_write_RSA_PUBKEY(stdout, client_rsa_keys);
 	// get the pk
-	RSA* client_rsa_pk = RSAPublicKey_dup(client_rsa_keys);
+	// RSA* client_rsa_pk = RSAPublicKey_dup(client_rsa_keys);
 
-	// encoded it so it can sent thru socket
-	BIO* bio = BIO_new(BIO_s_mem());
-	BUF_MEM* bio_buffer = NULL;
-	PEM_write_bio_RSA_PUBKEY(bio, client_rsa_pk);
+	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
+	if(!PEM_write_bio_RSA_PUBKEY(bio_rsa_key, client_rsa_keys)) {
+		printf("Cannot create public key\n");
+		exit(1);
+	}
 
-	BIO_get_mem_ptr(bio, &bio_buffer);
+	char* pk_str = NULL;
 
-	char* pk_str = (char*)malloc(bio_buffer->length + 1);
-	memcpy(pk_str, bio_buffer->data, bio_buffer->length);
-	pk_str[bio_buffer->length] = '\0';
+	long bio_mem_size = BIO_get_mem_data(bio_rsa_key, &pk_str);
+	pk_str = (char*)malloc(bio_mem_size + 1);
+	if(pk_str == NULL) {
+		printf("Cannot process public key\n");
+		exit(1);
+	}
 
-	BIO_free(bio);
+	memset(pk_str, 0, bio_mem_size + 1);
+	BIO_read(bio_rsa_key, pk_str, bio_mem_size);
+	log(pk_str, "client_pk");
+
 	struct sockaddr_in serv_addr;
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	struct hostent *server;
@@ -669,9 +679,9 @@ static int initClientNet(char* hostname, int port)
 		} else printf("Sended client rsa pk\n");
 
 
-		printf("%s", other_user_pk);
+		// printf("Got the server pk: %s\n", other_user_pk);
 
-		BIO* bio_key = BIO_new_mem_buf(pk_str, strlen(pk_str));
+		BIO* bio_key = BIO_new_mem_buf(other_user_pk, strlen(other_user_pk));
 		if(bio_key == NULL) {
 			printf("Cannot create bio object\n");
 			exit(-1);
@@ -682,9 +692,10 @@ static int initClientNet(char* hostname, int port)
 			printf("Cannot create server pk");
 			exit(-1);
 		}
-		// FILE* fs = fopen("got_server.pem", "w");
-		// PEM_write_RSA_PUBKEY(fs, server_rsa_pk);
-		// fclose(fs);
+
+		FILE* fs = fopen("server_rsa_pk.pem", "w");
+		PEM_write_RSA_PUBKEY(fs, server_rsa_pk);
+		fclose(fs);
 
 		BIO_free(bio_key);
 	}
