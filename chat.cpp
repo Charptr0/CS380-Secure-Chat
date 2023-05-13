@@ -808,6 +808,14 @@ static void msg_typed(char *line)
 			ssize_t nbytes;
 			if ((nbytes = send(sockfd,encrypted_line, global_encodedMessageLen,0)) == -1)
 				error("send failed");
+
+		// If client and DH is calculated then we can do HMAC
+		if (isclient && gotPK){
+			hmacClient(encrypted_line);
+		// Esle we do server when DH is calculated, then we do HMAC
+		} else if (!isclient && gotPK){
+			hmacServer(encrypted_line);
+		}
 		}
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,line_str,"me",msg_win});
@@ -1107,29 +1115,24 @@ void* recvMsg(void*)
 		// decrypt the message here
 		char* decryptedMessage = decryptMessage(msg);
 
-        // HMAC
-        //    If client and DH is calculated then we can do HMAC
-        if (isclient && gotPK){
-			hmacServer(decryptedMessage);
-            
-            // Server should already be computed
-            if (clientMac == serverMac) {
-                // send "authentication success"
-            } else {
-                // send "authentication failed"
-            }
-
-        // Esle we do server when DH is calculated, then we do HMAC
-        } else if (!isclient && gotPK){
-            hmacClient(decryptedMessage);
-
-            // client should already be computed
-            if (clientMac == serverMac) {
-                // send "authentication success"
-            } else {
-                // send "authentication failed"
-            }
-        }
+		// HMAC
+		// If client and DH are calculated, then we can do HMAC
+		if (isclient && gotPK) {
+			hmacServer(msg);
+			// Server should already be computed
+			if (clientMac != serverMac) {
+				should_exit = true;
+				exit(-1);
+			}
+		}
+		// Else, we do server when DH is calculated, then we do HMAC
+		else if (!isclient && gotPK) {
+			hmacClient(msg);
+			if (clientMac != serverMac) {
+				should_exit = true;
+				exit(-1);
+			}
+		}
 
 		pthread_mutex_lock(&qmx);
 		mq.push_back({false,decryptedMessage,"Mr Thread",msg_win});
