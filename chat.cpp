@@ -389,7 +389,7 @@ int initServerNet(int port)
 	server_rsa_keys = generateRSAKeys();
 
 	printf("Generated server rsa pk\n");
-	PEM_write_RSA_PUBKEY(stdout, server_rsa_keys);
+	// PEM_write_RSA_PUBKEY(stdout, server_rsa_keys);
 
 	// convert the public key to a string
 	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
@@ -568,7 +568,7 @@ static int initClientNet(char* hostname, int port)
 	// generate RSA key for the client
 	client_rsa_keys = generateRSAKeys();
 	printf("Generated client rsa keys\n");
-	PEM_write_RSA_PUBKEY(stdout, client_rsa_keys);
+	// PEM_write_RSA_PUBKEY(stdout, client_rsa_keys);
 
 	// convert the pk to a string
 	BIO* bio_rsa_key = BIO_new(BIO_s_mem());
