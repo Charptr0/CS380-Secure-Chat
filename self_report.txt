@@ -1,0 +1,29 @@
+CSC380 - Computer Security Self Report
+Group: Chenhao Li, Richard Yeung, Riaz Ahmed
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Diffie–Hellman - Richard Y
+
+Our chat program is able to successfully do the Diffie–Hellman key exchange allowing verification. It is written such that if the keys don’t match, then the users do not connect with each other and the program just closes. This is a simple method to provide protection from third party adversaries who are just trying to get into rooms without any security. In this case, the third party cannot connect to the room, assuming the chat program allows more than 2 users, without the correct key. If the adversary somehow intercepted and got the transferred public key, that still would not give them hints on what the legitimate users’ secret keys are. So if both users are able to connect with each other, they should have some confidence on who the other person is. However, it does not make this impervious to attackers. The obvious way around this would be if one of the user’s computer is compromised. The DH key can verify computers, but not the person behind them. So a third party can somehow physically access the computer and thus get into the chatroom, the legitimate user would have no idea other than some context clues.
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Message Encryption (RSA) - Chenhao L
+Once the Diffie–Hellman key exchange has been successful, both the server and the client and the server will exchange their RSA public keys. Once that has been successful, the two users can now chat securely with each other. Each message sent will be encrypted with the other user’s public key encoded in base 64. Once the recipient receives the message, they will decode it using their private key.
+
+Assumptions:
+Assuming that the two users have exchanged their public keys, they are able to feely decrypt the other users messages. The only resource that the adversary has access to is the encrypted message which is useless without knowing the user’s private key which is NEVER shared through the socket connection. Without knowing the private key, it is impossible to decrypt the actual message. If the adversary was able to intercept their public key exchanges at the very beginning, it does not bring any useful information since public keys are used to encrypt something and you cannot use the public key to decrypt an incoming encrypted message.
+
+Claims:
+Both users can securely chat as long as they have each other’s public key and the message is encrypted using their public keys. If it comes to the point where the message cannot be decrypted, it will close the program to avoid any message leaking out to an unwanted individual. This keeps the confidentiality of the message to the intended user and will refuse to display the message if there is any issue with decrypting the message. In addition, the user's private key is stored locally on the machine’s RAM and is destroyed after the user leaves the chat room. However these security measures do not stop if a third party was able to access the computer or in another case where the user used a cracked version of our program where it was able to grab and log the private key to someplace else. If that were to happen, it will completely make the chat unsecure since the adversary has the user’s private key and is able to decrypt all incoming messages.
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+Hash-based Message Authentication Code (HMAC) - Riaz A.
+
+The purpose of HMAC is to create reasonable security by providing a way to check for message integrity and authenticity. The goal is to make sure the message is not sabotaged by an adversary during transmission, and it does come from the person who has the shared key. We used SHA512 hashing algorithm to hash our shared key and the encrypted message. Our function creates a new hash for every message and is transmitted separately. Even if an adversary were to get a hold of this, they would not be able to break the hash and figure out the contents of the message, as we are using the encrypted message. The receiver of the message independently calculates their own HMAC hash and verifies the one they receive. If it matches, then we can conclude that the message is from the sender who shares your public key and has not been tampered with. 
+
+Assuming our adversary has unlimited resources with a supercomputer, they would have to obtain the encryption key and figure out what hash function was used, in order to manipulate the HMAC. If the wrong hashing function was used by the adversary, it would not match the one calculated by the receiver. Thus they would need the key and correct hash to create a HMAC that is reproducible by the receiver, in order to modify the contents of the message. If the adversary is really clever, they have some options. One thing they can do is completely remove the HMAC and it would cause the receiver to not accept the incoming message. Another potentially dangerous action the adversary can take is replaying the same message and HMAC. Since the contents of the message itself was not tampered with, the receiver would trust the message. Both of these options hinder communication. 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
