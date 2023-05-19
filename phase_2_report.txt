@@ -1,0 +1,22 @@
+Phase II Report
+
+Exchanged Group:
+Melchizedek De Castro
+Alhamza Muswara
+Rezwan Ahmed
+
+Richard Y.
+First thing to note is the diffie-hellman key. From their code, if you uncommented out their output, it seems that the server and client is unable to properly exchange their dhFinal key. As the image below shows, their keys do match from their own created dhFinal. However, if they are unable to exchange the dhFinal, they cannot authenticate who they are talking to and thus cannot say with certainty that they are talking to the appropriate user. Without authentication, any user can simply waltz right into the chat.
+
+Chenhao L.
+There seems to be an issue with how they handled their memory when it comes to computing the dhFinal. For me at least, I was not able to establish a connection between the two users and every attempt caused their program to crash with the error message “Illegal Instruction (core dumped)”. There are not a lot of answers on the web and the most relevant solution that I can find online was relating to pointers where you can check it out here [1]. By removing their dhFinal code, I was able to establish a connection. Due to this, I was not able to test a lot of their security measures and was not able to contribute a lot to this report. 
+
+On the bright side, I did test their claims regarding buffer overflows and can confirm that after typing a very long message (>800 characters), I was greeted with the error message “buffer overflow” and “smashing is detected”. Their program is definitely vulnerable to buffer overflows but I did notice that their program became unresponsive after sending a string that had > 200 characters. 
+
+[1] https://www.quora.com/What-is-an-illegal-instruction-error-in-C
+Yes, this is the most relevant solution I could find -_-
+
+Riaz Ahmed
+Additionally, they seem to be using the same aes encryption. It doesn’t seem like they are setting up each session differently. Thus if for some reason the encryption is compromised, there will be no forward secrecy. Having forward secrecy provides an additional layer of security by using different encryption keys, allowing you to keep past messages from being deciphered by the adversary. When using the same key, all messages can be decrypted by the attacker. Furthermore, since they are unable to properly send the computed diffie-hellman key exchange, they can’t do th HMAC. Without HMAC, you can’t really tell if they receive a message that was sabotaged or not. Thus the message integrity is also compromised. Their claims of an openssl error that results in repeating the last message is true as it happened when I tested it.
+
+
